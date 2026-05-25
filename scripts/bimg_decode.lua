@@ -1,5 +1,5 @@
 --
--- Copyright 2010-2025 Branimir Karadzic. All rights reserved.
+-- Copyright 2010-2026 Branimir Karadzic. All rights reserved.
 -- License: https://github.com/bkaradzic/bx#license-bsd-2-clause
 --
 
@@ -19,18 +19,17 @@ project "bimg_decode"
 	includedirs {
 		path.join(BIMG_DIR, "include"),
 		path.join(BIMG_DIR, "3rdparty"),
-		path.join(BIMG_DIR, "3rdparty/tinyexr/deps/miniz"),
+		path.join(BIMG_DIR, "3rdparty/tinyexr/deps"),
 	}
 
 	files {
 		path.join(BIMG_DIR, "include/**"),
 		path.join(BIMG_DIR, "src/image_decode.*"),
-		path.join(BIMG_DIR, "3rdparty/tinyexr/deps/miniz/miniz.*"),
 	}
 
 	if _OPTIONS["with-libheif"] then
 		defines {
-			"BIMG_DECODE_HEIF=1",
+			"BIMG_CONFIG_PARSE_HEIF=1",
 		}
 	end
 

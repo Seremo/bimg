@@ -1,12 +1,14 @@
 /*
- * Copyright 2011-2025 Branimir Karadzic. All rights reserved.
+ * Copyright 2011-2026 Branimir Karadzic. All rights reserved.
  * License: https://github.com/bkaradzic/bimg/blob/master/LICENSE
  */
 
 #include "bimg_p.h"
 #include <bx/hash.h>
 
+#if BIMG_CONFIG_DECODE_ASTC
 #include <astcenc.h>
+#endif
 
 #include <bx/debug.h>
 
@@ -256,7 +258,7 @@ namespace bimg
 	{
 		return _format != TextureFormat::Unknown
 			&& _format != TextureFormat::UnknownDepth
-			&& _format != TextureFormat::Count
+			&& _format  < TextureFormat::Count
 			;
 	}
 
@@ -334,8 +336,8 @@ namespace bimg
 		const uint16_t minBlockY   = blockInfo.minBlockY;
 		const uint8_t  blockSize   = blockInfo.blockSize;
 
-		_width  = bx::max<uint16_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
-		_height = bx::max<uint16_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
+		_width  = bx::max<uint16_t>(1, _width);
+		_height  = bx::max<uint16_t>(1, _height);
 		_depth  = bx::max<uint16_t>(1, _depth);
 		const uint8_t  numMips = calcNumMips(_hasMips, _width, _height, _depth);
 		const uint32_t sides   = _cubeMap ? 6 : 1;
@@ -347,11 +349,11 @@ namespace bimg
 
 		for (uint32_t lod = 0; lod < numMips; ++lod)
 		{
-			width  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
-			height = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
+			uint32_t mipMidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
+			uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
 			depth  = bx::max<uint32_t>(1, depth);
 
-			size += uint32_t(uint64_t(width/blockWidth * height/blockHeight * depth)*blockSize * sides);
+			size += uint32_t(uint64_t(mipMidth/blockWidth * mipHeight/blockHeight * depth)*blockSize * sides);
 
 			width  >>= 1;
 			height >>= 1;
@@ -455,16 +457,16 @@ namespace bimg
 	BX_SIMD_INLINE bx::simd128_t simd_to_linear(bx::simd128_t _a)
 	{
 		using namespace bx;
-		const simd128_t f12_92   = simd_ld(12.92f, 12.92f, 12.92f, 1.0f);
-		const simd128_t f0_055   = simd_ld(0.055f, 0.055f, 0.055f, 0.0f);
-		const simd128_t f1_055   = simd_ld(1.055f, 1.055f, 1.055f, 1.0f);
-		const simd128_t f2_4     = simd_ld(2.4f, 2.4f, 2.4f, 1.0f);
-		const simd128_t f0_04045 = simd_ld(0.04045f, 0.04045f, 0.04045f, 0.0f);
-		const simd128_t lo       = simd_div(_a, f12_92);
-		const simd128_t tmp0     = simd_add(_a, f0_055);
-		const simd128_t tmp1     = simd_div(tmp0, f1_055);
-		const simd128_t hi       = simd_pow(tmp1, f2_4);
-		const simd128_t mask     = simd_cmple(_a, f0_04045);
+		const simd128_t f12_92   = simd128_ld(12.92f, 12.92f, 12.92f, 1.0f);
+		const simd128_t f0_055   = simd128_ld(0.055f, 0.055f, 0.055f, 0.0f);
+		const simd128_t f1_055   = simd128_ld(1.055f, 1.055f, 1.055f, 1.0f);
+		const simd128_t f2_4     = simd128_ld(2.4f, 2.4f, 2.4f, 1.0f);
+		const simd128_t f0_04045 = simd128_ld(0.04045f, 0.04045f, 0.04045f, 0.0f);
+		const simd128_t lo       = simd_f32_div(_a, f12_92);
+		const simd128_t tmp0     = simd_f32_add(_a, f0_055);
+		const simd128_t tmp1     = simd_f32_div(tmp0, f1_055);
+		const simd128_t hi       = simd_f32_pow(tmp1, f2_4);
+		const simd128_t mask     = simd_f32_cmple(_a, f0_04045);
 		const simd128_t result   = simd_selb(mask, hi, lo);
 
 		return result;
@@ -473,17 +475,17 @@ namespace bimg
 	BX_SIMD_INLINE bx::simd128_t simd_to_gamma(bx::simd128_t _a)
 	{
 		using namespace bx;
-		const simd128_t f12_92     = simd_ld(12.92f, 12.92f, 12.92f, 1.0f);
-		const simd128_t f0_055     = simd_ld(0.055f, 0.055f, 0.055f, 0.0f);
-		const simd128_t f1_055     = simd_ld(1.055f, 1.055f, 1.055f, 1.0f);
-		const simd128_t f1o2_4     = simd_ld(1.0f/2.4f, 1.0f/2.4f, 1.0f/2.4f, 1.0f);
-		const simd128_t f0_0031308 = simd_ld(0.0031308f, 0.0031308f, 0.0031308f, 0.0f);
-		const simd128_t lo         = simd_mul(_a, f12_92);
-		const simd128_t absa       = simd_abs(_a);
-		const simd128_t tmp0       = simd_pow(absa, f1o2_4);
-		const simd128_t tmp1       = simd_mul(tmp0, f1_055);
-		const simd128_t hi         = simd_sub(tmp1, f0_055);
-		const simd128_t mask       = simd_cmple(_a, f0_0031308);
+		const simd128_t f12_92     = simd128_ld(12.92f, 12.92f, 12.92f, 1.0f);
+		const simd128_t f0_055     = simd128_ld(0.055f, 0.055f, 0.055f, 0.0f);
+		const simd128_t f1_055     = simd128_ld(1.055f, 1.055f, 1.055f, 1.0f);
+		const simd128_t f1o2_4     = simd128_ld(1.0f/2.4f, 1.0f/2.4f, 1.0f/2.4f, 1.0f);
+		const simd128_t f0_0031308 = simd128_ld(0.0031308f, 0.0031308f, 0.0031308f, 0.0f);
+		const simd128_t lo         = simd_f32_mul(_a, f12_92);
+		const simd128_t absa       = simd_f32_abs(_a);
+		const simd128_t tmp0       = simd_f32_pow(absa, f1o2_4);
+		const simd128_t tmp1       = simd_f32_mul(tmp0, f1_055);
+		const simd128_t hi         = simd_f32_sub(tmp1, f0_055);
+		const simd128_t mask       = simd_f32_cmple(_a, f0_0031308);
 		const simd128_t result     = simd_selb(mask, hi, lo);
 
 		return result;
@@ -503,13 +505,13 @@ namespace bimg
 		const uint8_t* src = (const uint8_t*)_src;
 
 		using namespace bx;
-		const simd128_t unpack = simd_ld(1.0f, 1.0f/256.0f, 1.0f/65536.0f, 1.0f/16777216.0f);
-		const simd128_t pack   = simd_ld(1.0f, 256.0f*0.5f, 65536.0f, 16777216.0f*0.5f);
-		const simd128_t umask  = simd_ild(0xff, 0xff00, 0xff0000, 0xff000000);
-		const simd128_t pmask  = simd_ild(0xff, 0x7f80, 0xff0000, 0x7f800000);
-		const simd128_t wflip  = simd_ild(0, 0, 0, 0x80000000);
-		const simd128_t wadd   = simd_ld(0.0f, 0.0f, 0.0f, 32768.0f*65536.0f);
-		const simd128_t quater = simd_splat(0.25f);
+		const simd128_t unpack = simd128_ld(1.0f, 1.0f/256.0f, 1.0f/65536.0f, 1.0f/16777216.0f);
+		const simd128_t pack   = simd128_ld(1.0f, 256.0f*0.5f, 65536.0f, 16777216.0f*0.5f);
+		const simd128_t umask  = simd128_ld(0xffu, 0xff00u, 0xff0000u, 0xff000000u);
+		const simd128_t pmask  = simd128_ld(0xffu, 0x7f80u, 0xff0000u, 0x7f800000u);
+		const simd128_t wflip  = simd128_ld(0u, 0u, 0u, 0x80000000u);
+		const simd128_t wadd   = simd128_ld(0.0f, 0.0f, 0.0f, 32768.0f*65536.0f);
+		const simd128_t quater = simd128_splat(0.25f);
 
 		for (uint32_t zz = 0; zz < _depth; ++zz)
 		{
@@ -519,10 +521,10 @@ namespace bimg
 				const uint8_t* rgba = src;
 				for (uint32_t xx = 0; xx < dstWidth; ++xx, rgba += 8, dst += 4)
 				{
-					const simd128_t abgr0  = simd_splat(rgba);
-					const simd128_t abgr1  = simd_splat(rgba+4);
-					const simd128_t abgr2  = simd_splat(rgba+_srcPitch);
-					const simd128_t abgr3  = simd_splat(rgba+_srcPitch+4);
+					const simd128_t abgr0  = simd128_splat(*(const uint32_t*)(rgba) );
+					const simd128_t abgr1  = simd128_splat(*(const uint32_t*)(rgba+4) );
+					const simd128_t abgr2  = simd128_splat(*(const uint32_t*)(rgba+_srcPitch) );
+					const simd128_t abgr3  = simd128_splat(*(const uint32_t*)(rgba+_srcPitch+4) );
 
 					const simd128_t abgr0m = simd_and(abgr0, umask);
 					const simd128_t abgr1m = simd_and(abgr1, umask);
@@ -532,40 +534,40 @@ namespace bimg
 					const simd128_t abgr1x = simd_xor(abgr1m, wflip);
 					const simd128_t abgr2x = simd_xor(abgr2m, wflip);
 					const simd128_t abgr3x = simd_xor(abgr3m, wflip);
-					const simd128_t abgr0f = simd_itof(abgr0x);
-					const simd128_t abgr1f = simd_itof(abgr1x);
-					const simd128_t abgr2f = simd_itof(abgr2x);
-					const simd128_t abgr3f = simd_itof(abgr3x);
-					const simd128_t abgr0c = simd_add(abgr0f, wadd);
-					const simd128_t abgr1c = simd_add(abgr1f, wadd);
-					const simd128_t abgr2c = simd_add(abgr2f, wadd);
-					const simd128_t abgr3c = simd_add(abgr3f, wadd);
-					const simd128_t abgr0n = simd_mul(abgr0c, unpack);
-					const simd128_t abgr1n = simd_mul(abgr1c, unpack);
-					const simd128_t abgr2n = simd_mul(abgr2c, unpack);
-					const simd128_t abgr3n = simd_mul(abgr3c, unpack);
+					const simd128_t abgr0f = simd_i32_itof(abgr0x);
+					const simd128_t abgr1f = simd_i32_itof(abgr1x);
+					const simd128_t abgr2f = simd_i32_itof(abgr2x);
+					const simd128_t abgr3f = simd_i32_itof(abgr3x);
+					const simd128_t abgr0c = simd_f32_add(abgr0f, wadd);
+					const simd128_t abgr1c = simd_f32_add(abgr1f, wadd);
+					const simd128_t abgr2c = simd_f32_add(abgr2f, wadd);
+					const simd128_t abgr3c = simd_f32_add(abgr3f, wadd);
+					const simd128_t abgr0n = simd_f32_mul(abgr0c, unpack);
+					const simd128_t abgr1n = simd_f32_mul(abgr1c, unpack);
+					const simd128_t abgr2n = simd_f32_mul(abgr2c, unpack);
+					const simd128_t abgr3n = simd_f32_mul(abgr3c, unpack);
 
 					const simd128_t abgr0l = simd_to_linear(abgr0n);
 					const simd128_t abgr1l = simd_to_linear(abgr1n);
 					const simd128_t abgr2l = simd_to_linear(abgr2n);
 					const simd128_t abgr3l = simd_to_linear(abgr3n);
 
-					const simd128_t sum0   = simd_add(abgr0l, abgr1l);
-					const simd128_t sum1   = simd_add(abgr2l, abgr3l);
-					const simd128_t sum2   = simd_add(sum0, sum1);
-					const simd128_t avg0   = simd_mul(sum2, quater);
+					const simd128_t sum0   = simd_f32_add(abgr0l, abgr1l);
+					const simd128_t sum1   = simd_f32_add(abgr2l, abgr3l);
+					const simd128_t sum2   = simd_f32_add(sum0, sum1);
+					const simd128_t avg0   = simd_f32_mul(sum2, quater);
 					const simd128_t avg1   = simd_to_gamma(avg0);
 
-					const simd128_t avg2   = simd_mul(avg1, pack);
-					const simd128_t ftoi0  = simd_ftoi(avg2);
+					const simd128_t avg2   = simd_f32_mul(avg1, pack);
+					const simd128_t ftoi0  = simd_f32_ftoi_trunc(avg2);
 					const simd128_t ftoi1  = simd_and(ftoi0, pmask);
-					const simd128_t zwxy   = simd_swiz_zwxy(ftoi1);
+					const simd128_t zwxy   = simd128_x32_swiz_zwxy(ftoi1);
 					const simd128_t tmp0   = simd_or(ftoi1, zwxy);
-					const simd128_t yyyy   = simd_swiz_yyyy(tmp0);
-					const simd128_t tmp1   = simd_iadd(yyyy, yyyy);
+					const simd128_t yyyy   = simd128_x32_swiz_yyyy(tmp0);
+					const simd128_t tmp1   = simd_i32_add(yyyy, yyyy);
 					const simd128_t result = simd_or(tmp0, tmp1);
 
-					simd_stx(dst, result);
+					simd_x32_st1(dst, result);
 				}
 			}
 		}
@@ -1015,8 +1017,8 @@ namespace bimg
 
 		using namespace bx;
 
-		const simd128_t mf0f0 = simd_isplat(0xff00ff00);
-		const simd128_t m0f0f = simd_isplat(0x00ff00ff);
+		const simd128_t mf0f0 = simd128_splat(uint32_t(0xff00ff00) );
+		const simd128_t m0f0f = simd128_splat(uint32_t(0x00ff00ff) );
 		const uint32_t  width = _width/4;
 
 		const uint8_t* srcData = (uint8_t*) _src;
@@ -1029,9 +1031,9 @@ namespace bimg
 
 			for (uint32_t xx = 0; xx < width; ++xx, src += 16, dst += 16)
 			{
-				const simd128_t tabgr = simd_ld(src);
-				const simd128_t t00ab = simd_srl(tabgr, 16);
-				const simd128_t tgr00 = simd_sll(tabgr, 16);
+				const simd128_t tabgr = simd128_ld(src);
+				const simd128_t t00ab = simd_x32_srl(tabgr, 16);
+				const simd128_t tgr00 = simd_x32_sll(tabgr, 16);
 				const simd128_t tgrab = simd_or(t00ab, tgr00);
 				const simd128_t ta0g0 = simd_and(tabgr, mf0f0);
 				const simd128_t t0r0b = simd_and(tgrab, m0f0f);
@@ -1043,7 +1045,7 @@ namespace bimg
 
 	void imageCopy(void* _dst, uint32_t _height, uint32_t _srcPitch, uint32_t _depth, const void* _src, uint32_t _dstPitch)
 	{
-		const uint32_t pitch = bx::uint32_min(_srcPitch, _dstPitch);
+		const uint32_t pitch = bx::min(_srcPitch, _dstPitch);
 		const uint8_t* src = (uint8_t*)_src;
 		uint8_t* dst = (uint8_t*)_dst;
 
@@ -1286,6 +1288,8 @@ namespace bimg
 			, _convertMips && 1 < _input.m_numMips
 			);
 
+		output->m_orientation = _input.m_orientation;
+
 		const uint16_t numSides = _input.m_numLayers * (_input.m_cubeMap ? 6 : 1);
 
 		for (uint16_t side = 0; side < numSides; ++side)
@@ -1299,9 +1303,22 @@ namespace bimg
 					imageGetRawData(*output, side, lod, output->m_data, output->m_size, dstMip);
 					uint8_t* dstData = const_cast<uint8_t*>(dstMip.m_data);
 
+					const bool needScratch = false
+						|| mip.m_width  != dstMip.m_width
+						|| mip.m_height != dstMip.m_height
+						;
+
+					const uint32_t dstBpp       = s_imageBlockInfo[_dstFormat].bitsPerPixel;
+					const uint32_t scratchPitch = mip.m_width * dstBpp / 8;
+					const uint32_t scratchSize  = scratchPitch * mip.m_height * mip.m_depth;
+					uint8_t* scratch = needScratch
+						? (uint8_t*)bx::alloc(_allocator, scratchSize)
+						: NULL
+						;
+
 					bool ok = imageConvert(
 						  _allocator
-						, dstData
+						, needScratch ? scratch : dstData
 						, _dstFormat
 						, mip.m_data
 						, mip.m_format
@@ -1309,6 +1326,29 @@ namespace bimg
 						, mip.m_height
 						, mip.m_depth
 						);
+
+					if (ok
+					&&  needScratch)
+					{
+						const uint32_t dstPitch = dstMip.m_width * dstBpp / 8;
+						for (uint32_t zz = 0; zz < dstMip.m_depth; ++zz)
+						{
+							bx::memCopy(
+								  dstData + zz*dstMip.m_height*dstPitch
+								, dstPitch
+								, scratch + zz*mip.m_height*scratchPitch
+								, scratchPitch
+								, dstPitch
+								, dstMip.m_height
+								);
+						}
+					}
+
+					if (NULL != scratch)
+					{
+						bx::free(_allocator, scratch);
+					}
+
 					BX_ASSERT(ok, "Conversion from %s to %s failed!"
 							, getName(_input.m_format)
 							, getName(output->m_format)
@@ -1340,6 +1380,31 @@ namespace bimg
 		if (!parseFnT(imageContainer, &reader, _err) )
 		{
 			return NULL;
+		}
+
+		{
+			const ImageBlockInfo& blockInfo = getBlockInfo(imageContainer.m_format);
+			const uint64_t blockWidth  = blockInfo.blockWidth;
+			const uint64_t blockHeight = blockInfo.blockHeight;
+			const uint64_t minBlockX   = blockInfo.minBlockX;
+			const uint64_t minBlockY   = blockInfo.minBlockY;
+			const uint64_t blockSize   = blockInfo.blockSize;
+
+			const uint64_t bw = bx::max<uint64_t>(blockWidth  * minBlockX, ( (imageContainer.m_width  + blockWidth  - 1) / blockWidth )*blockWidth);
+			const uint64_t bh = bx::max<uint64_t>(blockHeight * minBlockY, ( (imageContainer.m_height + blockHeight - 1) / blockHeight)*blockHeight);
+			const uint64_t bd = bx::max<uint64_t>(1, imageContainer.m_depth);
+			const uint64_t numLayers = bx::max<uint64_t>(1, imageContainer.m_numLayers);
+			const uint64_t sides = (imageContainer.m_cubeMap ? 6 : 1) * numLayers;
+			const uint64_t firstMipSize = (bw/blockWidth) * (bh/blockHeight) * bd * blockSize * sides;
+			const uint64_t offset = imageContainer.m_offset;
+
+			if (firstMipSize > uint64_t(_size)
+			||  offset       > uint64_t(_size)
+			||  firstMipSize > uint64_t(_size) - offset)
+			{
+				BX_ERROR_SET(_err, BIMG_ERROR, "Image: Declared dimensions exceed file size.");
+				return NULL;
+			}
 		}
 
 		ImageContainer* output = imageAlloc(_allocator
@@ -1379,22 +1444,25 @@ namespace bimg
 	static uint8_t bitRangeConvert(uint32_t _in, uint32_t _from, uint32_t _to)
 	{
 		using namespace bx;
-		uint32_t tmp0   = uint32_sll(1, _to);
-		uint32_t tmp1   = uint32_sll(1, _from);
-		uint32_t tmp2   = uint32_dec(tmp0);
-		uint32_t tmp3   = uint32_dec(tmp1);
-		uint32_t tmp4   = uint32_mul(_in, tmp2);
-		uint32_t tmp5   = uint32_add(tmp3, tmp4);
-		uint32_t tmp6   = uint32_srl(tmp5, _from);
-		uint32_t tmp7   = uint32_add(tmp5, tmp6);
-		uint32_t result = uint32_srl(tmp7, _from);
 
-		return uint8_t(result);
+		const simd32_t one    = simd32_splat(1u);
+		const simd32_t in     = simd32_splat(_in);
+		const simd32_t tmp0   = simd32_x32_sll(one, _to);
+		const simd32_t tmp1   = simd32_x32_sll(one, _from);
+		const simd32_t tmp2   = simd32_u32_sub(tmp0, one);
+		const simd32_t tmp3   = simd32_u32_sub(tmp1, one);
+		const simd32_t tmp4   = simd32_u32_mul(in, tmp2);
+		const simd32_t tmp5   = simd32_u32_add(tmp3, tmp4);
+		const simd32_t tmp6   = simd32_x32_srl(tmp5, _from);
+		const simd32_t tmp7   = simd32_u32_add(tmp5, tmp6);
+		const simd32_t result = simd32_x32_srl(tmp7, _from);
+
+		return uint8_t(result.u32);
 	}
 
 	static void decodeBlockDxt(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC2 || BIMG_DECODE_BC3) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC2 || BIMG_CONFIG_DECODE_BC3) )
 		{
 			return;
 		}
@@ -1430,7 +1498,7 @@ namespace bimg
 
 	static void decodeBlockDxt1(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC1 || BIMG_DECODE_BC2 || BIMG_DECODE_BC3) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC1 || BIMG_CONFIG_DECODE_BC2 || BIMG_CONFIG_DECODE_BC3) )
 		{
 			return;
 		}
@@ -1486,7 +1554,7 @@ namespace bimg
 
 	static void decodeBlockDxt23A(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC2) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC2) )
 		{
 			return;
 		}
@@ -1500,7 +1568,7 @@ namespace bimg
 
 	static void decodeBlockDxt45A(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC3 || BIMG_DECODE_BC4 || BIMG_DECODE_BC5) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC3 || BIMG_CONFIG_DECODE_BC4 || BIMG_CONFIG_DECODE_BC5) )
 		{
 			return;
 		}
@@ -1880,7 +1948,7 @@ namespace bimg
 
 	static void decodeBlockBc6h(uint16_t _dst[16*3], const uint8_t _src[16], bool _signed)
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC6) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC6) )
 		{
 			return;
 		}
@@ -2305,7 +2373,7 @@ namespace bimg
 
 	static void decodeBlockBc6h(float _dst[16*4], const uint8_t _src[16])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC6) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC6) )
 		{
 			return;
 		}
@@ -2358,7 +2426,7 @@ namespace bimg
 
 	static void decodeBlockBc7(uint8_t _dst[16*4], const uint8_t _src[16])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_BC7) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_BC7) )
 		{
 			return;
 		}
@@ -2390,6 +2458,8 @@ namespace bimg
 		uint8_t epG[6];
 		uint8_t epB[6];
 		uint8_t epA[6];
+
+		BX_ASSUME(mi.numSubsets <= 3);
 
 		for (uint8_t ii = 0; ii < mi.numSubsets; ++ii)
 		{
@@ -2552,7 +2622,7 @@ namespace bimg
 	//
 	static void decodeBlockATC(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_ATC) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_ATC) )
 		{
 			return;
 		}
@@ -2625,10 +2695,7 @@ namespace bimg
 
 	static uint8_t uint8_sat(int32_t _a)
 	{
-		using namespace bx;
-		const uint32_t min    = uint32_imin(_a, 255);
-		const uint32_t result = uint32_imax(min, 0);
-		return (uint8_t)result;
+		return (uint8_t)bx::clamp(_a, 0, 255);
 	}
 
 	static uint8_t uint8_satadd(int32_t _a, int32_t _b)
@@ -2864,7 +2931,7 @@ namespace bimg
 
 	static void decodeBlockEtc12(uint8_t _dst[16*4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_ETC1 || BIMG_DECODE_ETC2) )
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_ETC1 || BIMG_CONFIG_DECODE_ETC2) )
 		{
 			return;
 		}
@@ -3003,7 +3070,7 @@ namespace bimg
 
 	void decodeBlockEtc2Alpha(uint8_t _dst[16 * 4], const uint8_t _src[8])
 	{
-		if (!BX_ENABLED(BIMG_DECODE_ETC2))
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_ETC2))
 		{
 			return;
 		}
@@ -3066,11 +3133,15 @@ namespace bimg
 	uint32_t morton2d(uint32_t _x, uint32_t _y)
 	{
 		using namespace bx;
-		const uint32_t tmpx   = uint32_part1by1(_x);
-		const uint32_t xbits  = uint32_sll(tmpx, 1);
-		const uint32_t ybits  = uint32_part1by1(_y);
-		const uint32_t result = uint32_or(xbits, ybits);
-		return result;
+
+		const simd32_t xx     = simd32_splat(_x);
+		const simd32_t yy     = simd32_splat(_y);
+		const simd32_t tmpx   = simd32_x32_part1by1(xx);
+		const simd32_t tmpy   = simd32_x32_part1by1(yy);
+		const simd32_t xbits  = simd32_x32_sll(tmpx, 1);
+		const simd32_t result = simd32_or(xbits, tmpy);
+
+		return result.u32;
 	}
 
 	uint32_t getColor(const uint8_t _src[8])
@@ -4565,7 +4636,7 @@ namespace bimg
 		switch (_srcFormat)
 		{
 		case TextureFormat::BC1:
-			if (BX_ENABLED(BIMG_DECODE_BC1) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC1) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4584,13 +4655,13 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC1 decoder is disabled (BIMG_DECODE_BC1).");
+				BX_WARN(false, "BC1 decoder is disabled (BIMG_CONFIG_DECODE_BC1).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::BC2:
-			if (BX_ENABLED(BIMG_DECODE_BC2) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC2) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4611,13 +4682,13 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC2 decoder is disabled (BIMG_DECODE_BC2).");
+				BX_WARN(false, "BC2 decoder is disabled (BIMG_CONFIG_DECODE_BC2).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::BC3:
-			if (BX_ENABLED(BIMG_DECODE_BC3) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC3) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4638,38 +4709,13 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC3 decoder is disabled (BIMG_DECODE_BC3).");
+				BX_WARN(false, "BC3 decoder is disabled (BIMG_CONFIG_DECODE_BC3).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::BC4:
-			if (BX_ENABLED(BIMG_DECODE_BC4) )
-			{
-				for (uint32_t yy = 0; yy < height; ++yy)
-				{
-					for (uint32_t xx = 0; xx < width; ++xx)
-					{
-						decodeBlockDxt45A(temp, src);
-						src += 8;
-
-						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
-						bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
-						bx::memCopy(&block[1*_dstPitch], &temp[16], 16);
-						bx::memCopy(&block[2*_dstPitch], &temp[32], 16);
-						bx::memCopy(&block[3*_dstPitch], &temp[48], 16);
-					}
-				}
-			}
-			else
-			{
-				BX_WARN(false, "BC4 decoder is disabled (BIMG_DECODE_BC4).");
-				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
-			}
-			break;
-
-		case TextureFormat::BC5:
-			if (BX_ENABLED(BIMG_DECODE_BC5) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC4) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4677,16 +4723,12 @@ namespace bimg
 					{
 						decodeBlockDxt45A(temp+2, src);
 						src += 8;
-						decodeBlockDxt45A(temp+1, src);
-						src += 8;
 
 						for (uint32_t ii = 0; ii < 16; ++ii)
 						{
-							float nx = temp[ii*4+2]*2.0f/255.0f - 1.0f;
-							float ny = temp[ii*4+1]*2.0f/255.0f - 1.0f;
-							float nz = bx::sqrt(1.0f - nx*nx - ny*ny);
-							temp[ii*4+0] = uint8_t( (nz + 1.0f)*255.0f/2.0f);
-							temp[ii*4+3] = 0;
+							temp[ii*4+0] = 0;
+							temp[ii*4+1] = 0;
+							temp[ii*4+3] = 255;
 						}
 
 						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
@@ -4699,13 +4741,46 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC5 decoder is disabled (BIMG_DECODE_BC5).");
+				BX_WARN(false, "BC4 decoder is disabled (BIMG_CONFIG_DECODE_BC4).");
+				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
+			}
+			break;
+
+		case TextureFormat::BC5:
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC5) )
+			{
+				for (uint32_t yy = 0; yy < height; ++yy)
+				{
+					for (uint32_t xx = 0; xx < width; ++xx)
+					{
+						decodeBlockDxt45A(temp+2, src);
+						src += 8;
+						decodeBlockDxt45A(temp+1, src);
+						src += 8;
+
+						for (uint32_t ii = 0; ii < 16; ++ii)
+						{
+							temp[ii*4+0] = 0;
+							temp[ii*4+3] = 255;
+						}
+
+						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
+						bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
+						bx::memCopy(&block[1*_dstPitch], &temp[16], 16);
+						bx::memCopy(&block[2*_dstPitch], &temp[32], 16);
+						bx::memCopy(&block[3*_dstPitch], &temp[48], 16);
+					}
+				}
+			}
+			else
+			{
+				BX_WARN(false, "BC5 decoder is disabled (BIMG_CONFIG_DECODE_BC5).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::BC6H:
-			if (BX_ENABLED(BIMG_DECODE_BC6) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC6) )
 			{
 				ImageContainer* rgba32f = imageAlloc(_allocator
 					, TextureFormat::RGBA32F
@@ -4722,13 +4797,13 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC6 decoder is disabled (BIMG_DECODE_BC6).");
+				BX_WARN(false, "BC6 decoder is disabled (BIMG_CONFIG_DECODE_BC6).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::BC7:
-			if (BX_ENABLED(BIMG_DECODE_BC7) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC7) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4747,14 +4822,14 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "BC7 decoder is disabled (BIMG_DECODE_BC7).");
+				BX_WARN(false, "BC7 decoder is disabled (BIMG_CONFIG_DECODE_BC7).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::ETC1:
 		case TextureFormat::ETC2:
-			if (BX_ENABLED(BIMG_DECODE_ETC1 || BIMG_DECODE_ETC2) )
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_ETC1 || BIMG_CONFIG_DECODE_ETC2) )
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4773,13 +4848,13 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "ETC1/ETC2 decoder is disabled (BIMG_DECODE_ETC1/ETC2).");
+				BX_WARN(false, "ETC1/ETC2 decoder is disabled (BIMG_CONFIG_DECODE_ETC1/ETC2).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
 			break;
 
 		case TextureFormat::ETC2A:
-			if (BX_ENABLED(BIMG_DECODE_ETC2))
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_ETC2))
 			{
 				for (uint32_t yy = 0; yy < height; ++yy)
 				{
@@ -4800,7 +4875,7 @@ namespace bimg
 			}
 			else
 			{
-				BX_WARN(false, "ETC2 decoder is disabled (BIMG_DECODE_ETC2).");
+				BX_WARN(false, "ETC2 decoder is disabled (BIMG_CONFIG_DECODE_ETC2).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00));
 			}
 			break;
@@ -4808,6 +4883,14 @@ namespace bimg
 		case TextureFormat::ETC2A1:
 			BX_WARN(false, "ETC2A1 decoder is not implemented.");
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffff0000) );
+			break;
+
+		case TextureFormat::EACR11:
+		case TextureFormat::EACR11S:
+		case TextureFormat::EACRG11:
+		case TextureFormat::EACRG11S:
+			BX_WARN(false, "EAC decoder is not implemented.");
+			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ffff) );
 			break;
 
 		case TextureFormat::PTC12:
@@ -4945,7 +5028,7 @@ namespace bimg
 		case TextureFormat::BGRA8:
 			{
 				const uint32_t srcPitch = _width * 4;
-				const uint32_t size = bx::uint32_min(srcPitch, _dstPitch);
+				const uint32_t size = bx::min(srcPitch, _dstPitch);
 				bx::memCopy(_dst, _dstPitch, _src, srcPitch, size, _height);
 			}
 			break;
@@ -4954,9 +5037,12 @@ namespace bimg
 			{
 				const uint32_t srcBpp   = s_imageBlockInfo[_srcFormat].bitsPerPixel;
 				const uint32_t srcPitch = _width * srcBpp / 8;
-				if (!imageConvert(_allocator, _dst, TextureFormat::BGRA8, _src, _srcFormat, _width, _height, 1, srcPitch, _dstPitch) )
+				if (NULL == s_packUnpack[_srcFormat].unpack
+				||  NULL == s_packUnpack[TextureFormat::BGRA8].pack
+				||  !imageConvert(_allocator, _dst, TextureFormat::BGRA8, _src, _srcFormat, _width, _height, 1, srcPitch, _dstPitch) )
 				{
 					// Failed to convert, just make ugly red-yellow checkerboard texture.
+					BX_WARN(false, "Decoder for %s is not implemented.", getName(_srcFormat) );
 					imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xffff0000), UINT32_C(0xffffff00) );
 				}
 			}
@@ -4971,7 +5057,7 @@ namespace bimg
 		case TextureFormat::RGBA8:
 			{
 				const uint32_t srcPitch = _width * 4;
-				const uint32_t size = bx::uint32_min(srcPitch, _dstPitch);
+				const uint32_t size = bx::min(srcPitch, _dstPitch);
 				bx::memCopy(_dst, _dstPitch, _src, srcPitch, size, _height);
 			}
 			break;
@@ -4997,7 +5083,7 @@ namespace bimg
 		case TextureFormat::ASTC10x10:
 		case TextureFormat::ASTC12x10:
 		case TextureFormat::ASTC12x12:
-			if (BX_ENABLED(BIMG_DECODE_ASTC) )
+#if BIMG_CONFIG_DECODE_ASTC
 			{
 					const bimg::ImageBlockInfo& astcBlockInfo = bimg::getBlockInfo(_srcFormat);
 
@@ -5068,11 +5154,12 @@ namespace bimg
 
 					astcenc_context_free(context);
 			}
-			else
+#else
 			{
-				BX_WARN(false, "ASTC decoder is disabled (BIMG_DECODE_ASTC).");
+				BX_WARN(false, "ASTC decoder is disabled (BIMG_CONFIG_DECODE_ASTC).");
 				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ff00) );
 			}
+#endif
 			break;
 
 		default:
@@ -5127,22 +5214,22 @@ namespace bimg
 		const uint8_t* src = (const uint8_t*)_src;
 
 		using namespace bx;
-		const simd128_t unpack = simd_ld(1.0f/256.0f, 1.0f/256.0f/256.0f, 1.0f/65536.0f/256.0f, 1.0f/16777216.0f/256.0f);
-		const simd128_t umask  = simd_ild(0xff, 0xff00, 0xff0000, 0xff000000);
-		const simd128_t wflip  = simd_ild(0, 0, 0, 0x80000000);
-		const simd128_t wadd   = simd_ld(0.0f, 0.0f, 0.0f, 32768.0f*65536.0f);
+		const simd128_t unpack = simd128_ld(1.0f/256.0f, 1.0f/256.0f/256.0f, 1.0f/65536.0f/256.0f, 1.0f/16777216.0f/256.0f);
+		const simd128_t umask  = simd128_ld(0xffu, 0xff00u, 0xff0000u, 0xff000000u);
+		const simd128_t wflip  = simd128_ld(0u, 0u, 0u, 0x80000000u);
+		const simd128_t wadd   = simd128_ld(0.0f, 0.0f, 0.0f, 32768.0f*65536.0f);
 
 		for (uint32_t yy = 0, ystep = _srcPitch; yy < dstHeight; ++yy, src += ystep)
 		{
 			const uint8_t* rgba = src;
 			for (uint32_t xx = 0; xx < dstWidth; ++xx, rgba += 4, dst += 4)
 			{
-				const simd128_t abgr0  = simd_splat(rgba);
+				const simd128_t abgr0  = simd128_splat(*(const uint32_t*)(rgba) );
 				const simd128_t abgr0m = simd_and(abgr0, umask);
 				const simd128_t abgr0x = simd_xor(abgr0m, wflip);
-				const simd128_t abgr0f = simd_itof(abgr0x);
-				const simd128_t abgr0c = simd_add(abgr0f, wadd);
-				const simd128_t abgr0n = simd_mul(abgr0c, unpack);
+				const simd128_t abgr0f = simd_i32_itof(abgr0x);
+				const simd128_t abgr0c = simd_f32_add(abgr0f, wadd);
+				const simd128_t abgr0n = simd_f32_mul(abgr0c, unpack);
 
 				simd_st(dst, abgr0n);
 			}
@@ -5183,14 +5270,13 @@ namespace bimg
 							{
 								float nx = temp[ii*4+2]*2.0f/255.0f - 1.0f;
 								float ny = temp[ii*4+1]*2.0f/255.0f - 1.0f;
-								float nz = bx::sqrt(1.0f - nx*nx - ny*ny);
 
 								const uint32_t offset = (yy*4 + ii/4)*_width*16 + (xx*4 + ii%4)*16;
 								float* block = (float*)&dst[offset];
 								block[0] = nx;
 								block[1] = ny;
-								block[2] = nz;
-								block[3] = 0.0f;
+								block[2] = 0.0f;
+								block[3] = 1.0f;
 							}
 						}
 					}
@@ -5281,11 +5367,11 @@ namespace bimg
 
 			for (uint8_t lod = 0, num = _imageContainer.m_numMips; lod < num; ++lod)
 			{
-				width  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
-				height = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
+				uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
+				uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
 				depth  = bx::max<uint32_t>(1, depth);
 
-				const uint32_t mipSize = width/blockWidth * height/blockHeight * depth * blockSize;
+				const uint32_t mipSize = mipWidth/blockWidth * mipHeight/blockHeight * depth * blockSize;
 
 				if (_imageContainer.m_ktx)
 				{
@@ -5304,8 +5390,8 @@ namespace bimg
 					if (side == _side
 					&&  lod  == _lod)
 					{
-						_mip.m_width     = width;
-						_mip.m_height    = height;
+						_mip.m_width     = mipWidth;
+						_mip.m_height    = mipHeight;
 						_mip.m_depth     = depth;
 						_mip.m_blockSize = blockSize;
 						_mip.m_size      = mipSize;
@@ -5338,17 +5424,17 @@ namespace bimg
 				{
 					BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %d, size %d)", offset, _size);
 
-					width  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
-					height = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
+					uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
+					uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
 					depth  = bx::max<uint32_t>(1, depth);
 
-					uint32_t mipSize = width/blockWidth * height/blockHeight * depth * blockSize;
+					uint32_t mipSize = mipWidth/blockWidth * mipHeight/blockHeight * depth * blockSize;
 
 					if (side == _side
 					&&  lod  == _lod)
 					{
-						_mip.m_width     = width;
-						_mip.m_height    = height;
+						_mip.m_width     = mipWidth;
+						_mip.m_height    = mipHeight;
 						_mip.m_depth     = depth;
 						_mip.m_blockSize = blockSize;
 						_mip.m_size      = mipSize;
@@ -5962,11 +6048,11 @@ namespace bimg
 
 		for (uint8_t lod = 0; lod < _numMips && _err->isOk(); ++lod)
 		{
-			width  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
-			height = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
+			uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
+			uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
 			depth  = bx::max<uint32_t>(1, depth);
 
-			const uint32_t mipSize = width/blockWidth * height/blockHeight * depth * blockSize;
+			const uint32_t mipSize = mipWidth/blockWidth * mipHeight/blockHeight * depth * blockSize;
 			const uint32_t size = numSides == 6 && numLayers == 1 ? mipSize : mipSize * numSides * numLayers;
 			total += bx::write(_writer, size, _err);
 
