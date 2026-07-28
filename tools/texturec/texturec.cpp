@@ -305,7 +305,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 			if (inputFormat != outputFormat
 			&&  bimg::isCompressed(outputFormat) )
 			{
-				output = bimg::imageEncode(_allocator, outputFormat, _options.quality, *input);
+				output = bimg::imageEncode(_allocator, outputFormat, _options.quality, *input, _err);
 			}
 			else
 			{
@@ -355,7 +355,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 
 			if (bimg::TextureFormat::RGBA32F != outputFormat)
 			{
-				bimg::ImageContainer* temp = bimg::imageEncode(_allocator, outputFormat, _options.quality, *output);
+				bimg::ImageContainer* temp = bimg::imageEncode(_allocator, outputFormat, _options.quality, *output, _err);
 				bimg::imageFree(output);
 
 				output = temp;
@@ -393,7 +393,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// Normal map.
 				if (_options.normalMap)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -507,7 +507,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 					 || outputFormat == bimg::TextureFormat::BC7
 						)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -619,7 +619,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// SDF
 				else if (_options.sdf)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -665,7 +665,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							, alphaRef
 							);
 
-						size = bimg::imageGetSize(
+						size = (uint32_t)bimg::imageGetSize(
 							NULL
 							, uint16_t(dstMip.m_width)
 							, uint16_t(dstMip.m_height)
@@ -737,7 +737,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// RGBA8
 				else
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -930,6 +930,7 @@ void help(const char* _error = NULL, bool _showHelp = true)
 		  "    *.jpg (input)          JPEG Interchange Format.\n"
 		  "    *.hdr (input, output)  Radiance RGBE.\n"
 		  "    *.ktx (input, output)  Khronos Texture.\n"
+		  "    *.ktx2 (input, output) Khronos Texture 2.\n"
 		  "    *.png (input, output)  Portable Network Graphics.\n"
 		  "    *.psd (input)          Photoshop Document.\n"
 		  "    *.pvr (input)          PowerVR.\n"
@@ -1066,6 +1067,7 @@ int main(int _argc, const char* _argv[])
 	}
 
 	bx::StringView saveAs = cmdLine.findOption("as");
+	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".ktx2") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".ktx") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".dds") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".png") : saveAs;
@@ -1240,7 +1242,11 @@ int main(int _argc, const char* _argv[])
 		bx::FileWriter writer;
 		if (bx::open(&writer, outputFileName, false, &err) )
 		{
-			if (!bx::strFindI(saveAs, "ktx").isEmpty() )
+			if (!bx::strFindI(saveAs, "ktx2").isEmpty() )
+			{
+				bimg::imageWriteKtx2(&writer, *output, output->m_data, output->m_size, &err);
+			}
+			else if (!bx::strFindI(saveAs, "ktx").isEmpty() )
 			{
 				bimg::imageWriteKtx(&writer, *output, output->m_data, output->m_size, &err);
 			}

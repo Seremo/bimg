@@ -309,24 +309,56 @@ namespace bimg
 		return TextureFormat::Unknown;
 	}
 
-	uint8_t imageGetNumMips(TextureFormat::Enum _format, uint16_t _width, uint16_t _height, uint16_t _depth)
+	static const char* s_imageParserName[] =
+	{
+		"AVIF", // Avif
+		"BMP",  // Bmp
+		"DDS",  // Dds
+		"EXR",  // Exr
+		"GIF",  // Gif
+		"HDR",  // Hdr
+		"HEIF", // Heif
+		"JPEG", // Jpeg
+		"KTX",  // Ktx
+		"KTX2", // Ktx2
+		"PIC",  // Pic
+		"PNG",  // Png
+		"PNM",  // Pnm
+		"PSD",  // Psd
+		"PVR3", // Pvr3
+		"TGA",  // Tga
+		"WebP", // Webp
+	};
+	static_assert(ImageParser::Count == BX_COUNTOF(s_imageParserName) );
+
+	const char* getName(ImageParser::Enum _parser)
+	{
+		if (_parser >= ImageParser::Count)
+		{
+			return "Unknown?!";
+		}
+
+		return s_imageParserName[_parser];
+	}
+
+	uint8_t imageGetNumMips(TextureFormat::Enum _format, uint32_t _width, uint32_t _height, uint32_t _depth)
 	{
 		const ImageBlockInfo& blockInfo = getBlockInfo(_format);
-		const uint16_t blockWidth  = blockInfo.blockWidth;
-		const uint16_t blockHeight = blockInfo.blockHeight;
-		const uint16_t minBlockX   = blockInfo.minBlockX;
-		const uint16_t minBlockY   = blockInfo.minBlockY;
+		const uint32_t blockWidth  = blockInfo.blockWidth;
+		const uint32_t blockHeight = blockInfo.blockHeight;
+		const uint32_t minBlockX   = blockInfo.minBlockX;
+		const uint32_t minBlockY   = blockInfo.minBlockY;
 
-		_width  = bx::max<uint16_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth )*blockWidth);
-		_height = bx::max<uint16_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
-		_depth  = bx::max<uint16_t>(1, _depth);
+		_width  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth )*blockWidth);
+		_height = bx::max<uint32_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
+		_depth  = bx::max<uint32_t>(1, _depth);
 
 		uint8_t numMips = calcNumMips(true, _width, _height, _depth);
 
 		return numMips;
 	}
 
-	uint32_t imageGetSize(TextureInfo* _info, uint16_t _width, uint16_t _height, uint16_t _depth, bool _cubeMap, bool _hasMips, uint16_t _numLayers, TextureFormat::Enum _format)
+	uint64_t imageGetSize(TextureInfo* _info, uint32_t _width, uint32_t _height, uint32_t _depth, bool _cubeMap, bool _hasMips, uint16_t _numLayers, TextureFormat::Enum _format)
 	{
 		const ImageBlockInfo& blockInfo = getBlockInfo(_format);
 		const uint8_t  bpp         = blockInfo.bitsPerPixel;
@@ -336,16 +368,16 @@ namespace bimg
 		const uint16_t minBlockY   = blockInfo.minBlockY;
 		const uint8_t  blockSize   = blockInfo.blockSize;
 
-		_width  = bx::max<uint16_t>(1, _width);
-		_height  = bx::max<uint16_t>(1, _height);
-		_depth  = bx::max<uint16_t>(1, _depth);
+		_width  = bx::max<uint32_t>(1, _width);
+		_height  = bx::max<uint32_t>(1, _height);
+		_depth  = bx::max<uint32_t>(1, _depth);
 		const uint8_t  numMips = calcNumMips(_hasMips, _width, _height, _depth);
 		const uint32_t sides   = _cubeMap ? 6 : 1;
 
 		uint32_t width  = _width;
 		uint32_t height = _height;
 		uint32_t depth  = _depth;
-		uint32_t size   = 0;
+		uint64_t size   = 0;
 
 		for (uint32_t lod = 0; lod < numMips; ++lod)
 		{
@@ -353,7 +385,7 @@ namespace bimg
 			uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
 			depth  = bx::max<uint32_t>(1, depth);
 
-			size += uint32_t(uint64_t(mipMidth/blockWidth * mipHeight/blockHeight * depth)*blockSize * sides);
+			size += uint64_t(mipMidth/blockWidth) * (mipHeight/blockHeight) * depth * blockSize * sides;
 
 			width  >>= 1;
 			height >>= 1;
@@ -365,13 +397,13 @@ namespace bimg
 		if (NULL != _info)
 		{
 			_info->format  = _format;
-			_info->width   = _width;
-			_info->height  = _height;
-			_info->depth   = _depth;
+			_info->width   = uint16_t(_width);
+			_info->height  = uint16_t(_height);
+			_info->depth   = uint16_t(_depth);
 			_info->numMips = numMips;
 			_info->numLayers = _numLayers;
 			_info->cubeMap   = _cubeMap;
-			_info->storageSize  = size;
+			_info->storageSize  = uint32_t(size);
 			_info->bitsPerPixel = bpp;
 		}
 
@@ -1266,7 +1298,7 @@ namespace bimg
 
 		if (_dstFormat == _srcFormat)
 		{
-			bx::memCopy(_dst, _src, _width*_height*_depth*(srcBpp/8) );
+			bx::memCopy(_dst, _src, (uint64_t(_width) * _height * _depth * srcBpp) / 8);
 			return true;
 		}
 
@@ -1280,15 +1312,21 @@ namespace bimg
 	{
 		ImageContainer* output = imageAlloc(_allocator
 			, _dstFormat
-			, uint16_t(_input.m_width)
-			, uint16_t(_input.m_height)
-			, uint16_t(_input.m_depth)
+			, _input.m_width
+			, _input.m_height
+			, _input.m_depth
 			, _input.m_numLayers
 			, _input.m_cubeMap
 			, _convertMips && 1 < _input.m_numMips
 			);
 
+		if (NULL == output)
+		{
+			return NULL;
+		}
+
 		output->m_orientation = _input.m_orientation;
+		output->m_parser      = _input.m_parser;
 
 		const uint16_t numSides = _input.m_numLayers * (_input.m_cubeMap ? 6 : 1);
 
@@ -1409,15 +1447,23 @@ namespace bimg
 
 		ImageContainer* output = imageAlloc(_allocator
 			, imageContainer.m_format
-			, uint16_t(imageContainer.m_width)
-			, uint16_t(imageContainer.m_height)
-			, uint16_t(imageContainer.m_depth)
+			, imageContainer.m_width
+			, imageContainer.m_height
+			, imageContainer.m_depth
 			, imageContainer.m_numLayers
 			, imageContainer.m_cubeMap
 			, 1 < imageContainer.m_numMips
 			);
+
+		if (NULL == output)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "Image: Unsupported dimensions.");
+			return NULL;
+		}
+
 		output->m_srgb = imageContainer.m_srgb;
 		output->m_hasAlpha = imageContainer.m_hasAlpha;
+		output->m_parser = imageContainer.m_parser;
 
 		const uint16_t numSides = imageContainer.m_numLayers * (imageContainer.m_cubeMap ? 6 : 1);
 
@@ -1432,7 +1478,7 @@ namespace bimg
 					if (imageGetRawData(imageContainer, side, lod, _src, _size, mip) )
 					{
 						uint8_t* dstData = const_cast<uint8_t*>(dstMip.m_data);
-						bx::memCopy(dstData, mip.m_data, mip.m_size);
+						bx::memCopy(dstData, mip.m_data, bx::min(mip.m_size, dstMip.m_size) );
 					}
 				}
 			}
@@ -3048,6 +3094,148 @@ namespace bimg
 		}
 	}
 
+	static const int32_t s_etc2a1Mod[8][4] =
+	{
+		{ 0,   8, 0,   -8 },
+		{ 0,  17, 0,  -17 },
+		{ 0,  29, 0,  -29 },
+		{ 0,  42, 0,  -42 },
+		{ 0,  60, 0,  -60 },
+		{ 0,  80, 0,  -80 },
+		{ 0, 106, 0, -106 },
+		{ 0, 183, 0, -183 },
+	};
+
+	static void decodeBlockEtc2PunchThrough(uint8_t _dst[16*4], const uint8_t _src[8])
+	{
+		uint32_t indexMsb = (_src[4]<<8) | _src[5];
+		uint32_t indexLsb = (_src[6]<<8) | _src[7];
+
+		for (uint32_t ii = 0; ii < 16; ++ii)
+		{
+			const uint32_t idx        = (ii&0xc) | ( (ii & 0x3)<<4);
+			const uint32_t pixelIndex = (indexLsb & 1) | ( (indexMsb & 1)<<1);
+
+			if (2 == pixelIndex)
+			{
+				_dst[idx + 0] = 0;
+				_dst[idx + 1] = 0;
+				_dst[idx + 2] = 0;
+				_dst[idx + 3] = 0;
+			}
+
+			indexLsb >>= 1;
+			indexMsb >>= 1;
+		}
+	}
+
+	static void decodeBlockEtc2Rgb8A1(uint8_t _dst[16*4], const uint8_t _src[8])
+	{
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_ETC2) )
+		{
+			return;
+		}
+
+		const bool flipBit = 0 != (_src[3] & 0x1);
+		const bool opaque  = 0 != (_src[3] & 0x2);
+
+		uint8_t rgb[8];
+		rgb[0] = _src[0] >> 3;
+		rgb[1] = _src[1] >> 3;
+		rgb[2] = _src[2] >> 3;
+
+		int8_t diff[3];
+		diff[0] = int8_t( (_src[0] & 0x7)<<5)>>5;
+		diff[1] = int8_t( (_src[1] & 0x7)<<5)>>5;
+		diff[2] = int8_t( (_src[2] & 0x7)<<5)>>5;
+
+		const int8_t rr = rgb[0] + diff[0];
+		const int8_t gg = rgb[1] + diff[1];
+		const int8_t bb = rgb[2] + diff[2];
+
+		if (0  > rr
+		||  31 < rr)
+		{
+			decodeBlockEtc2ModeT(_dst, _src);
+
+			if (!opaque)
+			{
+				decodeBlockEtc2PunchThrough(_dst, _src);
+			}
+
+			return;
+		}
+
+		if (0  > gg
+		||  31 < gg)
+		{
+			decodeBlockEtc2ModeH(_dst, _src);
+
+			if (!opaque)
+			{
+				decodeBlockEtc2PunchThrough(_dst, _src);
+			}
+
+			return;
+		}
+
+		if (0  > bb
+		||  31 < bb)
+		{
+			decodeBlockEtc2ModePlanar(_dst, _src);
+			return;
+		}
+
+		rgb[0] = bitRangeConvert(rgb[0], 5, 8);
+		rgb[1] = bitRangeConvert(rgb[1], 5, 8);
+		rgb[2] = bitRangeConvert(rgb[2], 5, 8);
+		rgb[4] = bitRangeConvert(rr,     5, 8);
+		rgb[5] = bitRangeConvert(gg,     5, 8);
+		rgb[6] = bitRangeConvert(bb,     5, 8);
+
+		uint32_t table[2];
+		table[0] = (_src[3] >> 5) & 0x7;
+		table[1] = (_src[3] >> 2) & 0x7;
+
+		uint32_t indexMsb = (_src[4]<<8) | _src[5];
+		uint32_t indexLsb = (_src[6]<<8) | _src[7];
+
+		for (uint32_t ii = 0; ii < 16; ++ii)
+		{
+			const uint32_t block = flipBit
+				? (ii>>1)&1
+				:  ii>>3
+				;
+			const uint32_t color      = block<<2;
+			const uint32_t idx        = (ii&0xc) | ( (ii & 0x3)<<4);
+			const uint32_t pixelIndex = (indexLsb & 1) | ( (indexMsb & 1)<<1);
+
+			if (!opaque
+			&&  2 == pixelIndex)
+			{
+				_dst[idx + 0] = 0;
+				_dst[idx + 1] = 0;
+				_dst[idx + 2] = 0;
+				_dst[idx + 3] = 0;
+			}
+			else
+			{
+				const int32_t mod = opaque
+					? s_etc1Mod  [table[block] ][pixelIndex]
+					: s_etc2a1Mod[table[block] ][pixelIndex]
+					;
+
+				_dst[idx + 0] = uint8_satadd(rgb[color+2], mod);
+				_dst[idx + 1] = uint8_satadd(rgb[color+1], mod);
+				_dst[idx + 2] = uint8_satadd(rgb[color+0], mod);
+				_dst[idx + 3] = 255;
+			}
+
+			indexLsb >>= 1;
+			indexMsb >>= 1;
+		}
+	}
+
 	static const int8_t s_etc2aMod[16][8] =
 	{
 		{ -3, -6,  -9, -15, 2, 5, 8, 14 },
@@ -3085,11 +3273,54 @@ namespace bimg
 			| ((uint64_t)_src[6] << 8)
 			| _src[7];
 
-		for (int ii = 0; ii < 16; ii++) {
+		for (int ii = 0; ii < 16; ii++)
+		{
 			const uint32_t idx = (ii & 0xc) | ((ii & 0x3) << 4);
 			const  int32_t mod = modTable[(indices >> (45 - ii * 3)) & 0x7];
 
 			_dst[idx + 3] = uint8_satadd(bc, mod*mult);
+		}
+	}
+
+	template<bool SignedT>
+	static void decodeBlockEac(uint8_t _dst[16*4], const uint8_t _src[8], uint32_t _byteOffset)
+	{
+		if (!BX_ENABLED(BIMG_CONFIG_DECODE_ETC2) )
+		{
+			return;
+		}
+
+		const int32_t  base     = SignedT
+			? int32_t(int8_t(_src[0]) )
+			: int32_t(_src[0])
+			;
+		const int8_t*  modTable = s_etc2aMod[_src[1] & 0x0f];
+		const int32_t  mult     = (_src[1] & 0xf0) >> 4;
+		const uint64_t indices  = ( (uint64_t)_src[2] << 40)
+			| ( (uint64_t)_src[3] << 32)
+			| ( (uint64_t)_src[4] << 24)
+			| ( (uint64_t)_src[5] << 16)
+			| ( (uint64_t)_src[6] <<  8)
+			|             _src[7]
+			;
+
+		for (int32_t ii = 0; ii < 16; ++ii)
+		{
+			const uint32_t idx = (ii & 0xc) | ( (ii & 0x3) << 4);
+			const  int32_t mod = modTable[(indices >> (45 - ii*3) ) & 0x7];
+
+			if (SignedT)
+			{
+				const int32_t b     = (base < -127 ? -127 : base) * 8;
+				const int32_t value = bx::clamp(0 != mult ? b + mod*mult*8 : b + mod, -1023, 1023);
+				_dst[idx + _byteOffset] = uint8_t( (value + 1023)*255/2046);
+			}
+			else
+			{
+				const int32_t b     = base*8 + 4;
+				const int32_t value = bx::clamp(0 != mult ? b + mod*mult*8 : b + mod, 0, 2047);
+				_dst[idx + _byteOffset] = uint8_t(value >> 3);
+			}
 		}
 	}
 
@@ -3368,21 +3599,41 @@ namespace bimg
 		}
 	}
 
-	ImageContainer* imageAlloc(bx::AllocatorI* _allocator, TextureFormat::Enum _format, uint16_t _width, uint16_t _height, uint16_t _depth, uint16_t _numLayers, bool _cubeMap, bool _hasMips, const void* _data)
+	ImageContainer* imageAlloc(bx::AllocatorI* _allocator, TextureFormat::Enum _format, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _numLayers, bool _cubeMap, bool _hasMips, const void* _data)
 	{
 		const ImageBlockInfo& blockInfo = getBlockInfo(_format);
-		const uint16_t blockWidth  = blockInfo.blockWidth;
-		const uint16_t blockHeight = blockInfo.blockHeight;
-		const uint16_t minBlockX   = blockInfo.minBlockX;
-		const uint16_t minBlockY   = blockInfo.minBlockY;
+		const uint32_t blockWidth  = blockInfo.blockWidth;
+		const uint32_t blockHeight = blockInfo.blockHeight;
+		const uint32_t minBlockX   = blockInfo.minBlockX;
+		const uint32_t minBlockY   = blockInfo.minBlockY;
 
-		_width     = bx::max<uint16_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
-		_height    = bx::max<uint16_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
-		_depth     = bx::max<uint16_t>(1, _depth);
-		_numLayers = bx::max<uint16_t>(1, _numLayers);
+		_width     = bx::max<uint32_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
+		_height    = bx::max<uint32_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
+		_depth     = bx::max<uint32_t>(1, _depth);
+		_numLayers = bx::max<uint32_t>(1, _numLayers);
+
+		// Reject dimensions that don't fit in 16 bits. No GPU supports textures
+		// larger than 65535 in any dimension, and the image format/size helpers
+		// (and ImageContainer::m_numLayers) are 16-bit; allowing larger values
+		// would truncate and under-allocate, leading to heap overflow writes when
+		// pixel data is copied in.
+		if (_width     > UINT16_MAX
+		||  _height    > UINT16_MAX
+		||  _depth     > UINT16_MAX
+		||  _numLayers > UINT16_MAX)
+		{
+			return NULL;
+		}
 
 		const uint8_t numMips = _hasMips ? imageGetNumMips(_format, _width, _height, _depth) : 1;
-		uint32_t size = imageGetSize(NULL, _width, _height, _depth, _cubeMap, _hasMips, _numLayers, _format);
+		uint64_t size = imageGetSize(NULL, _width, _height, _depth, _cubeMap, _hasMips, uint16_t(_numLayers), _format);
+
+		// ImageContainer::m_size/m_offset are 32-bit, so reject anything that
+		// can't be addressed within that range to avoid truncated allocations.
+		if (size > UINT32_MAX)
+		{
+			return NULL;
+		}
 
 		ImageContainer* imageContainer = (ImageContainer*)bx::alignedAlloc(_allocator, size + bx::alignUp(sizeof(ImageContainer), 16), 16);
 
@@ -3390,18 +3641,19 @@ namespace bimg
 		imageContainer->m_data        = bx::alignPtr(imageContainer + 1, 0, 16);
 		imageContainer->m_format      = _format;
 		imageContainer->m_orientation = Orientation::R0;
-		imageContainer->m_size        = size;
+		imageContainer->m_parser      = ImageParser::Count;
+		imageContainer->m_size        = uint32_t(size);
 		imageContainer->m_offset      = 0;
 		imageContainer->m_width       = _width;
 		imageContainer->m_height      = _height;
 		imageContainer->m_depth       = _depth;
-		imageContainer->m_numLayers   = _numLayers;
+		imageContainer->m_numLayers   = uint16_t(_numLayers);
 		imageContainer->m_numMips     = numMips;
 		imageContainer->m_hasAlpha    = false;
 		imageContainer->m_cubeMap     = _cubeMap;
 		imageContainer->m_ktx         = false;
+		imageContainer->m_ktx2        = false;
 		imageContainer->m_pvr3        = false;
-		imageContainer->m_ktxLE       = false;
 		imageContainer->m_srgb        = false;
 
 		if (NULL != _data)
@@ -3946,9 +4198,10 @@ namespace bimg
 		_imageContainer.m_hasAlpha    = hasAlpha;
 		_imageContainer.m_cubeMap     = cubeMap;
 		_imageContainer.m_ktx         = false;
-		_imageContainer.m_ktxLE       = false;
+		_imageContainer.m_ktx2        = false;
 		_imageContainer.m_pvr3        = false;
 		_imageContainer.m_srgb        = srgb;
+		_imageContainer.m_parser      = ImageParser::Dds;
 
 		return true;
 	}
@@ -4232,56 +4485,63 @@ namespace bimg
 	{
 		BX_ERROR_SCOPE(_err);
 
+		static const uint8_t kKtx1IdentifierTail[8] =
+		{
+			0x20, 0x31, 0x31, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+		};
+
 		uint8_t identifier[8];
 		bx::read(_reader, identifier, _err);
 
-		if (identifier[1] != '1'
-		&&  identifier[2] != '1')
+		if (0 != bx::memCmp(identifier, kKtx1IdentifierTail, sizeof(identifier) ) )
 		{
-			BX_ERROR_SET(_err, BIMG_ERROR, "KTX: Unrecognized version.");
 			return false;
 		}
 
 		uint32_t endianness;
 		bx::read(_reader, endianness, _err);
 
-		bool fromLittleEndian = 0x04030201 == endianness;
+		if (0x04030201 != endianness)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX: Big-endian KTX files are not supported.");
+			return false;
+		}
 
 		uint32_t glType;
-		bx::readHE(_reader, glType, fromLittleEndian, _err);
+		bx::read(_reader, glType, _err);
 
 		uint32_t glTypeSize;
-		bx::readHE(_reader, glTypeSize, fromLittleEndian, _err);
+		bx::read(_reader, glTypeSize, _err);
 
 		uint32_t glFormat;
-		bx::readHE(_reader, glFormat, fromLittleEndian, _err);
+		bx::read(_reader, glFormat, _err);
 
 		uint32_t glInternalFormat;
-		bx::readHE(_reader, glInternalFormat, fromLittleEndian, _err);
+		bx::read(_reader, glInternalFormat, _err);
 
 		uint32_t glBaseInternalFormat;
-		bx::readHE(_reader, glBaseInternalFormat, fromLittleEndian, _err);
+		bx::read(_reader, glBaseInternalFormat, _err);
 
 		uint32_t width;
-		bx::readHE(_reader, width, fromLittleEndian, _err);
+		bx::read(_reader, width, _err);
 
 		uint32_t height;
-		bx::readHE(_reader, height, fromLittleEndian, _err);
+		bx::read(_reader, height, _err);
 
 		uint32_t depth;
-		bx::readHE(_reader, depth, fromLittleEndian, _err);
+		bx::read(_reader, depth, _err);
 
 		uint32_t numberOfArrayElements;
-		bx::readHE(_reader, numberOfArrayElements, fromLittleEndian, _err);
+		bx::read(_reader, numberOfArrayElements, _err);
 
 		uint32_t numFaces;
-		bx::readHE(_reader, numFaces, fromLittleEndian, _err);
+		bx::read(_reader, numFaces, _err);
 
 		uint32_t numMips;
-		bx::readHE(_reader, numMips, fromLittleEndian, _err);
+		bx::read(_reader, numMips, _err);
 
 		uint32_t metaDataSize;
-		bx::readHE(_reader, metaDataSize, fromLittleEndian, _err);
+		bx::read(_reader, metaDataSize, _err);
 
 		if (!_err->isOk() )
 		{
@@ -4338,9 +4598,10 @@ namespace bimg
 		_imageContainer.m_hasAlpha    = hasAlpha;
 		_imageContainer.m_cubeMap     = numFaces == 6;
 		_imageContainer.m_ktx         = true;
-		_imageContainer.m_ktxLE       = fromLittleEndian;
+		_imageContainer.m_ktx2        = false;
 		_imageContainer.m_pvr3        = false;
 		_imageContainer.m_srgb        = srgb;
+		_imageContainer.m_parser      = ImageParser::Ktx;
 
 		if (TextureFormat::Unknown == format)
 		{
@@ -4354,6 +4615,1075 @@ namespace bimg
 	ImageContainer* imageParseKtx(bx::AllocatorI* _allocator, const void* _src, uint32_t _size, bx::Error* _err)
 	{
 		return imageParseT<KTX_MAGIC, imageParseKtx>(_allocator, _src, _size, _err);
+	}
+
+#define KTX2_HEADER_SIZE             80
+#define KTX2_LEVEL_INDEX_ENTRY_SIZE  24
+
+#define KTX2_FORMAT_UNDEFINED                       0
+#define KTX2_FORMAT_R4G4B4A4_UNORM_PACK16           2
+#define KTX2_FORMAT_B4G4R4A4_UNORM_PACK16           3
+#define KTX2_FORMAT_R5G6B5_UNORM_PACK16             4
+#define KTX2_FORMAT_B5G6R5_UNORM_PACK16             5
+#define KTX2_FORMAT_R5G5B5A1_UNORM_PACK16           6
+#define KTX2_FORMAT_B5G5R5A1_UNORM_PACK16           7
+#define KTX2_FORMAT_R8_UNORM                        9
+#define KTX2_FORMAT_R8_SNORM                       10
+#define KTX2_FORMAT_R8_UINT                        13
+#define KTX2_FORMAT_R8_SINT                        14
+#define KTX2_FORMAT_R8_SRGB                        15
+#define KTX2_FORMAT_R8G8_UNORM                     16
+#define KTX2_FORMAT_R8G8_SNORM                     17
+#define KTX2_FORMAT_R8G8_UINT                      20
+#define KTX2_FORMAT_R8G8_SINT                      21
+#define KTX2_FORMAT_R8G8_SRGB                      22
+#define KTX2_FORMAT_R8G8B8_UNORM                   23
+#define KTX2_FORMAT_R8G8B8_SNORM                   24
+#define KTX2_FORMAT_R8G8B8_UINT                    27
+#define KTX2_FORMAT_R8G8B8_SINT                    28
+#define KTX2_FORMAT_R8G8B8_SRGB                    29
+#define KTX2_FORMAT_R8G8B8A8_UNORM                 37
+#define KTX2_FORMAT_R8G8B8A8_SNORM                 38
+#define KTX2_FORMAT_R8G8B8A8_UINT                  41
+#define KTX2_FORMAT_R8G8B8A8_SINT                  42
+#define KTX2_FORMAT_R8G8B8A8_SRGB                  43
+#define KTX2_FORMAT_B8G8R8A8_UNORM                 44
+#define KTX2_FORMAT_B8G8R8A8_SRGB                  50
+#define KTX2_FORMAT_A2B10G10R10_UNORM_PACK32       64
+#define KTX2_FORMAT_R16_UNORM                      70
+#define KTX2_FORMAT_R16_SNORM                      71
+#define KTX2_FORMAT_R16_UINT                       74
+#define KTX2_FORMAT_R16_SINT                       75
+#define KTX2_FORMAT_R16_SFLOAT                     76
+#define KTX2_FORMAT_R16G16_UNORM                   77
+#define KTX2_FORMAT_R16G16_SNORM                   78
+#define KTX2_FORMAT_R16G16_UINT                    81
+#define KTX2_FORMAT_R16G16_SINT                    82
+#define KTX2_FORMAT_R16G16_SFLOAT                  83
+#define KTX2_FORMAT_R16G16B16A16_UNORM             91
+#define KTX2_FORMAT_R16G16B16A16_SNORM             92
+#define KTX2_FORMAT_R16G16B16A16_UINT              95
+#define KTX2_FORMAT_R16G16B16A16_SINT              96
+#define KTX2_FORMAT_R16G16B16A16_SFLOAT            97
+#define KTX2_FORMAT_R32_UINT                       98
+#define KTX2_FORMAT_R32_SINT                       99
+#define KTX2_FORMAT_R32_SFLOAT                    100
+#define KTX2_FORMAT_R32G32_UINT                   101
+#define KTX2_FORMAT_R32G32_SINT                   102
+#define KTX2_FORMAT_R32G32_SFLOAT                 103
+#define KTX2_FORMAT_R32G32B32A32_UINT             107
+#define KTX2_FORMAT_R32G32B32A32_SINT             108
+#define KTX2_FORMAT_R32G32B32A32_SFLOAT           109
+#define KTX2_FORMAT_B10G11R11_UFLOAT_PACK32       122
+#define KTX2_FORMAT_E5B9G9R9_UFLOAT_PACK32        123
+#define KTX2_FORMAT_BC1_RGB_UNORM_BLOCK           131
+#define KTX2_FORMAT_BC1_RGB_SRGB_BLOCK            132
+#define KTX2_FORMAT_BC1_RGBA_UNORM_BLOCK          133
+#define KTX2_FORMAT_BC1_RGBA_SRGB_BLOCK           134
+#define KTX2_FORMAT_BC2_UNORM_BLOCK               135
+#define KTX2_FORMAT_BC2_SRGB_BLOCK                136
+#define KTX2_FORMAT_BC3_UNORM_BLOCK               137
+#define KTX2_FORMAT_BC3_SRGB_BLOCK                138
+#define KTX2_FORMAT_BC4_UNORM_BLOCK               139
+#define KTX2_FORMAT_BC4_SNORM_BLOCK               140
+#define KTX2_FORMAT_BC5_UNORM_BLOCK               141
+#define KTX2_FORMAT_BC5_SNORM_BLOCK               142
+#define KTX2_FORMAT_BC6H_UFLOAT_BLOCK             143
+#define KTX2_FORMAT_BC6H_SFLOAT_BLOCK             144
+#define KTX2_FORMAT_BC7_UNORM_BLOCK               145
+#define KTX2_FORMAT_BC7_SRGB_BLOCK                146
+#define KTX2_FORMAT_ETC2_R8G8B8_UNORM_BLOCK       147
+#define KTX2_FORMAT_ETC2_R8G8B8_SRGB_BLOCK        148
+#define KTX2_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK     149
+#define KTX2_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK      150
+#define KTX2_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK     151
+#define KTX2_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK      152
+#define KTX2_FORMAT_EAC_R11_UNORM_BLOCK           153
+#define KTX2_FORMAT_EAC_R11_SNORM_BLOCK           154
+#define KTX2_FORMAT_EAC_R11G11_UNORM_BLOCK        155
+#define KTX2_FORMAT_EAC_R11G11_SNORM_BLOCK        156
+#define KTX2_FORMAT_ASTC_4x4_UNORM_BLOCK          157
+#define KTX2_FORMAT_ASTC_4x4_SRGB_BLOCK           158
+#define KTX2_FORMAT_ASTC_5x4_UNORM_BLOCK          159
+#define KTX2_FORMAT_ASTC_5x4_SRGB_BLOCK           160
+#define KTX2_FORMAT_ASTC_5x5_UNORM_BLOCK          161
+#define KTX2_FORMAT_ASTC_5x5_SRGB_BLOCK           162
+#define KTX2_FORMAT_ASTC_6x5_UNORM_BLOCK          163
+#define KTX2_FORMAT_ASTC_6x5_SRGB_BLOCK           164
+#define KTX2_FORMAT_ASTC_6x6_UNORM_BLOCK          165
+#define KTX2_FORMAT_ASTC_6x6_SRGB_BLOCK           166
+#define KTX2_FORMAT_ASTC_8x5_UNORM_BLOCK          167
+#define KTX2_FORMAT_ASTC_8x5_SRGB_BLOCK           168
+#define KTX2_FORMAT_ASTC_8x6_UNORM_BLOCK          169
+#define KTX2_FORMAT_ASTC_8x6_SRGB_BLOCK           170
+#define KTX2_FORMAT_ASTC_8x8_UNORM_BLOCK          171
+#define KTX2_FORMAT_ASTC_8x8_SRGB_BLOCK           172
+#define KTX2_FORMAT_ASTC_10x5_UNORM_BLOCK         173
+#define KTX2_FORMAT_ASTC_10x5_SRGB_BLOCK          174
+#define KTX2_FORMAT_ASTC_10x6_UNORM_BLOCK         175
+#define KTX2_FORMAT_ASTC_10x6_SRGB_BLOCK          176
+#define KTX2_FORMAT_ASTC_10x8_UNORM_BLOCK         177
+#define KTX2_FORMAT_ASTC_10x8_SRGB_BLOCK          178
+#define KTX2_FORMAT_ASTC_10x10_UNORM_BLOCK        179
+#define KTX2_FORMAT_ASTC_10x10_SRGB_BLOCK         180
+#define KTX2_FORMAT_ASTC_12x10_UNORM_BLOCK        181
+#define KTX2_FORMAT_ASTC_12x10_SRGB_BLOCK         182
+#define KTX2_FORMAT_ASTC_12x12_UNORM_BLOCK        183
+#define KTX2_FORMAT_ASTC_12x12_SRGB_BLOCK         184
+#define KTX2_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG   1000054000
+#define KTX2_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG   1000054001
+#define KTX2_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG   1000054002
+#define KTX2_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG   1000054003
+#define KTX2_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG    1000054004
+#define KTX2_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG    1000054005
+#define KTX2_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG    1000054006
+#define KTX2_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG    1000054007
+
+#define KTX2_DF_MODEL_UNSPECIFIED  0
+#define KTX2_DF_MODEL_RGBSDA       1
+#define KTX2_DF_MODEL_BC1A       128
+#define KTX2_DF_MODEL_BC2        129
+#define KTX2_DF_MODEL_BC3        130
+#define KTX2_DF_MODEL_BC4        131
+#define KTX2_DF_MODEL_BC5        132
+#define KTX2_DF_MODEL_BC6H       133
+#define KTX2_DF_MODEL_BC7        134
+#define KTX2_DF_MODEL_ETC1       160
+#define KTX2_DF_MODEL_ETC2       161
+#define KTX2_DF_MODEL_ASTC       162
+#define KTX2_DF_MODEL_PVRTC      164
+#define KTX2_DF_MODEL_PVRTC2     165
+
+#define KTX2_DF_TRANSFER_LINEAR    1
+#define KTX2_DF_TRANSFER_SRGB      2
+
+#define KTX2_DF_PRIMARIES_BT709    1
+
+#define KTX2_DF_CHANNEL_RGBSDA_R   0
+#define KTX2_DF_CHANNEL_RGBSDA_G   1
+#define KTX2_DF_CHANNEL_RGBSDA_B   2
+#define KTX2_DF_CHANNEL_RGBSDA_A  15
+
+#define KTX2_DF_SAMPLE_QUALIFIER_LINEAR    (1u << 4)
+#define KTX2_DF_SAMPLE_QUALIFIER_EXPONENT  (1u << 5)
+#define KTX2_DF_SAMPLE_QUALIFIER_SIGNED    (1u << 6)
+#define KTX2_DF_SAMPLE_QUALIFIER_FLOAT     (1u << 7)
+
+	struct Ktx2FormatInfo
+	{
+		uint32_t m_vkFormat;
+		uint32_t m_vkFormatSrgb;
+	};
+
+	static const Ktx2FormatInfo s_translateKtx2Format[] =
+	{
+		{ KTX2_FORMAT_BC1_RGBA_UNORM_BLOCK,        KTX2_FORMAT_BC1_RGBA_SRGB_BLOCK        }, // BC1
+		{ KTX2_FORMAT_BC2_UNORM_BLOCK,             KTX2_FORMAT_BC2_SRGB_BLOCK             }, // BC2
+		{ KTX2_FORMAT_BC3_UNORM_BLOCK,             KTX2_FORMAT_BC3_SRGB_BLOCK             }, // BC3
+		{ KTX2_FORMAT_BC4_UNORM_BLOCK,             KTX2_FORMAT_UNDEFINED                  }, // BC4
+		{ KTX2_FORMAT_BC5_UNORM_BLOCK,             KTX2_FORMAT_UNDEFINED                  }, // BC5
+		{ KTX2_FORMAT_BC6H_SFLOAT_BLOCK,           KTX2_FORMAT_UNDEFINED                  }, // BC6H
+		{ KTX2_FORMAT_BC7_UNORM_BLOCK,             KTX2_FORMAT_BC7_SRGB_BLOCK             }, // BC7
+		{ KTX2_FORMAT_ETC2_R8G8B8_UNORM_BLOCK,     KTX2_FORMAT_ETC2_R8G8B8_SRGB_BLOCK     }, // ETC1 (no Vulkan ETC1, use ETC2 RGB)
+		{ KTX2_FORMAT_ETC2_R8G8B8_UNORM_BLOCK,     KTX2_FORMAT_ETC2_R8G8B8_SRGB_BLOCK     }, // ETC2
+		{ KTX2_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,   KTX2_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK   }, // ETC2A
+		{ KTX2_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK,   KTX2_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK   }, // ETC2A1
+		{ KTX2_FORMAT_EAC_R11_UNORM_BLOCK,         KTX2_FORMAT_UNDEFINED                  }, // EACR11
+		{ KTX2_FORMAT_EAC_R11_SNORM_BLOCK,         KTX2_FORMAT_UNDEFINED                  }, // EACR11S
+		{ KTX2_FORMAT_EAC_R11G11_UNORM_BLOCK,      KTX2_FORMAT_UNDEFINED                  }, // EACRG11
+		{ KTX2_FORMAT_EAC_R11G11_SNORM_BLOCK,      KTX2_FORMAT_UNDEFINED                  }, // EACRG11S
+		{ KTX2_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG }, // PTC12
+		{ KTX2_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG }, // PTC14
+		{ KTX2_FORMAT_PVRTC1_2BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC1_2BPP_SRGB_BLOCK_IMG }, // PTC12A
+		{ KTX2_FORMAT_PVRTC1_4BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC1_4BPP_SRGB_BLOCK_IMG }, // PTC14A
+		{ KTX2_FORMAT_PVRTC2_2BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC2_2BPP_SRGB_BLOCK_IMG }, // PTC22
+		{ KTX2_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG, KTX2_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG }, // PTC24
+		{ KTX2_FORMAT_UNDEFINED,                   KTX2_FORMAT_UNDEFINED                  }, // ATC
+		{ KTX2_FORMAT_UNDEFINED,                   KTX2_FORMAT_UNDEFINED                  }, // ATCE
+		{ KTX2_FORMAT_UNDEFINED,                   KTX2_FORMAT_UNDEFINED                  }, // ATCI
+		{ KTX2_FORMAT_ASTC_4x4_UNORM_BLOCK,        KTX2_FORMAT_ASTC_4x4_SRGB_BLOCK        }, // ASTC4x4
+		{ KTX2_FORMAT_ASTC_5x4_UNORM_BLOCK,        KTX2_FORMAT_ASTC_5x4_SRGB_BLOCK        }, // ASTC5x4
+		{ KTX2_FORMAT_ASTC_5x5_UNORM_BLOCK,        KTX2_FORMAT_ASTC_5x5_SRGB_BLOCK        }, // ASTC5x5
+		{ KTX2_FORMAT_ASTC_6x5_UNORM_BLOCK,        KTX2_FORMAT_ASTC_6x5_SRGB_BLOCK        }, // ASTC6x5
+		{ KTX2_FORMAT_ASTC_6x6_UNORM_BLOCK,        KTX2_FORMAT_ASTC_6x6_SRGB_BLOCK        }, // ASTC6x6
+		{ KTX2_FORMAT_ASTC_8x5_UNORM_BLOCK,        KTX2_FORMAT_ASTC_8x5_SRGB_BLOCK        }, // ASTC8x5
+		{ KTX2_FORMAT_ASTC_8x6_UNORM_BLOCK,        KTX2_FORMAT_ASTC_8x6_SRGB_BLOCK        }, // ASTC8x6
+		{ KTX2_FORMAT_ASTC_8x8_UNORM_BLOCK,        KTX2_FORMAT_ASTC_8x8_SRGB_BLOCK        }, // ASTC8x8
+		{ KTX2_FORMAT_ASTC_10x5_UNORM_BLOCK,       KTX2_FORMAT_ASTC_10x5_SRGB_BLOCK       }, // ASTC10x5
+		{ KTX2_FORMAT_ASTC_10x6_UNORM_BLOCK,       KTX2_FORMAT_ASTC_10x6_SRGB_BLOCK       }, // ASTC10x6
+		{ KTX2_FORMAT_ASTC_10x8_UNORM_BLOCK,       KTX2_FORMAT_ASTC_10x8_SRGB_BLOCK       }, // ASTC10x8
+		{ KTX2_FORMAT_ASTC_10x10_UNORM_BLOCK,      KTX2_FORMAT_ASTC_10x10_SRGB_BLOCK      }, // ASTC10x10
+		{ KTX2_FORMAT_ASTC_12x10_UNORM_BLOCK,      KTX2_FORMAT_ASTC_12x10_SRGB_BLOCK      }, // ASTC12x10
+		{ KTX2_FORMAT_ASTC_12x12_UNORM_BLOCK,      KTX2_FORMAT_ASTC_12x12_SRGB_BLOCK      }, // ASTC12x12
+		{ KTX2_FORMAT_UNDEFINED,                   KTX2_FORMAT_UNDEFINED                  }, // Unknown
+		{ KTX2_FORMAT_UNDEFINED,                   KTX2_FORMAT_UNDEFINED                  }, // R1
+		{ KTX2_FORMAT_R8_UNORM,                    KTX2_FORMAT_UNDEFINED                  }, // A8 (no direct Vulkan equivalent, use R8)
+		{ KTX2_FORMAT_R8_UNORM,                    KTX2_FORMAT_R8_SRGB                    }, // R8
+		{ KTX2_FORMAT_R8_SINT,                     KTX2_FORMAT_UNDEFINED                  }, // R8I
+		{ KTX2_FORMAT_R8_UINT,                     KTX2_FORMAT_UNDEFINED                  }, // R8U
+		{ KTX2_FORMAT_R8_SNORM,                    KTX2_FORMAT_UNDEFINED                  }, // R8S
+		{ KTX2_FORMAT_R16_UNORM,                   KTX2_FORMAT_UNDEFINED                  }, // R16
+		{ KTX2_FORMAT_R16_SINT,                    KTX2_FORMAT_UNDEFINED                  }, // R16I
+		{ KTX2_FORMAT_R16_UINT,                    KTX2_FORMAT_UNDEFINED                  }, // R16U
+		{ KTX2_FORMAT_R16_SFLOAT,                  KTX2_FORMAT_UNDEFINED                  }, // R16F
+		{ KTX2_FORMAT_R16_SNORM,                   KTX2_FORMAT_UNDEFINED                  }, // R16S
+		{ KTX2_FORMAT_R32_SINT,                    KTX2_FORMAT_UNDEFINED                  }, // R32I
+		{ KTX2_FORMAT_R32_UINT,                    KTX2_FORMAT_UNDEFINED                  }, // R32U
+		{ KTX2_FORMAT_R32_SFLOAT,                  KTX2_FORMAT_UNDEFINED                  }, // R32F
+		{ KTX2_FORMAT_R8G8_UNORM,                  KTX2_FORMAT_R8G8_SRGB                  }, // RG8
+		{ KTX2_FORMAT_R8G8_SINT,                   KTX2_FORMAT_UNDEFINED                  }, // RG8I
+		{ KTX2_FORMAT_R8G8_UINT,                   KTX2_FORMAT_UNDEFINED                  }, // RG8U
+		{ KTX2_FORMAT_R8G8_SNORM,                  KTX2_FORMAT_UNDEFINED                  }, // RG8S
+		{ KTX2_FORMAT_R16G16_UNORM,                KTX2_FORMAT_UNDEFINED                  }, // RG16
+		{ KTX2_FORMAT_R16G16_SINT,                 KTX2_FORMAT_UNDEFINED                  }, // RG16I
+		{ KTX2_FORMAT_R16G16_UINT,                 KTX2_FORMAT_UNDEFINED                  }, // RG16U
+		{ KTX2_FORMAT_R16G16_SFLOAT,               KTX2_FORMAT_UNDEFINED                  }, // RG16F
+		{ KTX2_FORMAT_R16G16_SNORM,                KTX2_FORMAT_UNDEFINED                  }, // RG16S
+		{ KTX2_FORMAT_R32G32_SINT,                 KTX2_FORMAT_UNDEFINED                  }, // RG32I
+		{ KTX2_FORMAT_R32G32_UINT,                 KTX2_FORMAT_UNDEFINED                  }, // RG32U
+		{ KTX2_FORMAT_R32G32_SFLOAT,               KTX2_FORMAT_UNDEFINED                  }, // RG32F
+		{ KTX2_FORMAT_R8G8B8_UNORM,                KTX2_FORMAT_R8G8B8_SRGB                }, // RGB8
+		{ KTX2_FORMAT_R8G8B8_SINT,                 KTX2_FORMAT_UNDEFINED                  }, // RGB8I
+		{ KTX2_FORMAT_R8G8B8_UINT,                 KTX2_FORMAT_UNDEFINED                  }, // RGB8U
+		{ KTX2_FORMAT_R8G8B8_SNORM,                KTX2_FORMAT_UNDEFINED                  }, // RGB8S
+		{ KTX2_FORMAT_E5B9G9R9_UFLOAT_PACK32,      KTX2_FORMAT_UNDEFINED                  }, // RGB9E5F
+		{ KTX2_FORMAT_B8G8R8A8_UNORM,              KTX2_FORMAT_B8G8R8A8_SRGB              }, // BGRA8
+		{ KTX2_FORMAT_R8G8B8A8_UNORM,              KTX2_FORMAT_R8G8B8A8_SRGB              }, // RGBA8
+		{ KTX2_FORMAT_R8G8B8A8_SINT,               KTX2_FORMAT_UNDEFINED                  }, // RGBA8I
+		{ KTX2_FORMAT_R8G8B8A8_UINT,               KTX2_FORMAT_UNDEFINED                  }, // RGBA8U
+		{ KTX2_FORMAT_R8G8B8A8_SNORM,              KTX2_FORMAT_UNDEFINED                  }, // RGBA8S
+		{ KTX2_FORMAT_R16G16B16A16_UNORM,          KTX2_FORMAT_UNDEFINED                  }, // RGBA16
+		{ KTX2_FORMAT_R16G16B16A16_SINT,           KTX2_FORMAT_UNDEFINED                  }, // RGBA16I
+		{ KTX2_FORMAT_R16G16B16A16_UINT,           KTX2_FORMAT_UNDEFINED                  }, // RGBA16U
+		{ KTX2_FORMAT_R16G16B16A16_SFLOAT,         KTX2_FORMAT_UNDEFINED                  }, // RGBA16F
+		{ KTX2_FORMAT_R16G16B16A16_SNORM,          KTX2_FORMAT_UNDEFINED                  }, // RGBA16S
+		{ KTX2_FORMAT_R32G32B32A32_SINT,           KTX2_FORMAT_UNDEFINED                  }, // RGBA32I
+		{ KTX2_FORMAT_R32G32B32A32_UINT,           KTX2_FORMAT_UNDEFINED                  }, // RGBA32U
+		{ KTX2_FORMAT_R32G32B32A32_SFLOAT,         KTX2_FORMAT_UNDEFINED                  }, // RGBA32F
+		{ KTX2_FORMAT_B5G6R5_UNORM_PACK16,         KTX2_FORMAT_UNDEFINED                  }, // B5G6R5
+		{ KTX2_FORMAT_R5G6B5_UNORM_PACK16,         KTX2_FORMAT_UNDEFINED                  }, // R5G6B5
+		{ KTX2_FORMAT_B4G4R4A4_UNORM_PACK16,       KTX2_FORMAT_UNDEFINED                  }, // BGRA4
+		{ KTX2_FORMAT_R4G4B4A4_UNORM_PACK16,       KTX2_FORMAT_UNDEFINED                  }, // RGBA4
+		{ KTX2_FORMAT_B5G5R5A1_UNORM_PACK16,       KTX2_FORMAT_UNDEFINED                  }, // BGR5A1
+		{ KTX2_FORMAT_R5G5B5A1_UNORM_PACK16,       KTX2_FORMAT_UNDEFINED                  }, // RGB5A1
+		{ KTX2_FORMAT_A2B10G10R10_UNORM_PACK32,    KTX2_FORMAT_UNDEFINED                  }, // RGB10A2
+		{ KTX2_FORMAT_B10G11R11_UFLOAT_PACK32,     KTX2_FORMAT_UNDEFINED                  }, // RG11B10F
+	};
+	static_assert(TextureFormat::UnknownDepth == BX_COUNTOF(s_translateKtx2Format) );
+
+	struct Ktx2FormatInfo2
+	{
+		uint32_t            m_vkFormat;
+		TextureFormat::Enum m_format;
+		bool                m_srgb;
+	};
+
+	static const Ktx2FormatInfo2 s_translateKtx2Format2[] =
+	{
+		{ KTX2_FORMAT_BC1_RGB_UNORM_BLOCK, TextureFormat::BC1, false },
+		{ KTX2_FORMAT_BC1_RGB_SRGB_BLOCK,  TextureFormat::BC1, true  },
+	};
+
+	static const uint8_t s_ktx2Identifier[12] =
+	{
+		0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+	};
+
+	static constexpr uint32_t ktx2MipAlignment(uint32_t _blockSize)
+	{
+		if (0 == (_blockSize & 3) )
+		{
+			return _blockSize;
+		}
+
+		if (0 == (_blockSize & 1) )
+		{
+			return _blockSize * 2;
+		}
+
+		return _blockSize * 4;
+	}
+
+	static constexpr uint64_t ktx2AlignUp(uint64_t _value, uint64_t _align)
+	{
+		return ( (_value + _align - 1) / _align) * _align;
+	}
+
+	bool imageParseKtx2(ImageContainer& _imageContainer, const void* _src, uint32_t _size, bx::Error* _err)
+	{
+		BX_ERROR_SCOPE(_err);
+
+		if (_size < KTX2_HEADER_SIZE)
+		{
+			return false;
+		}
+
+		const uint8_t* src = (const uint8_t*)_src;
+
+		if (0 != bx::memCmp(src, s_ktx2Identifier, 12) )
+		{
+			return false;
+		}
+
+		bx::MemoryReader reader(src + 12, _size - 12);
+
+		uint32_t vkFormat;
+		bx::read(&reader, vkFormat, _err);
+
+		uint32_t typeSize;
+		bx::read(&reader, typeSize, _err);
+
+		uint32_t pixelWidth;
+		bx::read(&reader, pixelWidth, _err);
+
+		uint32_t pixelHeight;
+		bx::read(&reader, pixelHeight, _err);
+
+		uint32_t pixelDepth;
+		bx::read(&reader, pixelDepth, _err);
+
+		uint32_t layerCount;
+		bx::read(&reader, layerCount, _err);
+
+		uint32_t faceCount;
+		bx::read(&reader, faceCount, _err);
+
+		uint32_t levelCount;
+		bx::read(&reader, levelCount, _err);
+
+		uint32_t supercompressionScheme;
+		bx::read(&reader, supercompressionScheme, _err);
+
+		uint32_t dfdByteOffset;
+		bx::read(&reader, dfdByteOffset, _err);
+
+		uint32_t dfdByteLength;
+		bx::read(&reader, dfdByteLength, _err);
+
+		uint32_t kvdByteOffset;
+		bx::read(&reader, kvdByteOffset, _err);
+
+		uint32_t kvdByteLength;
+		bx::read(&reader, kvdByteLength, _err);
+
+		uint64_t sgdByteOffset;
+		bx::read(&reader, sgdByteOffset, _err);
+
+		uint64_t sgdByteLength;
+		bx::read(&reader, sgdByteLength, _err);
+
+		BX_UNUSED(typeSize, dfdByteOffset, dfdByteLength, kvdByteOffset, kvdByteLength, sgdByteOffset, sgdByteLength);
+
+		if (!_err->isOk() )
+		{
+			return false;
+		}
+
+		if (0 != supercompressionScheme)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Supercompression is not supported.");
+			return false;
+		}
+
+		const uint32_t numMips   = bx::max<uint32_t>(levelCount, 1);
+		const uint32_t numLayers = bx::max<uint32_t>(layerCount, 1);
+		const uint32_t numFaces  = bx::max<uint32_t>(faceCount,  1);
+		const uint32_t width     = bx::max<uint32_t>(pixelWidth, 1);
+		const uint32_t height    = bx::max<uint32_t>(pixelHeight, 1);
+		const uint32_t depth     = bx::max<uint32_t>(pixelDepth, 1);
+		const bool     cubeMap   = (6 == faceCount);
+
+		if (16 < numMips
+		|| (cubeMap && 1 != depth) )
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Invalid header values.");
+			return false;
+		}
+
+		TextureFormat::Enum format = TextureFormat::Unknown;
+		bool srgb = false;
+
+		for (uint32_t ii = 0; ii < BX_COUNTOF(s_translateKtx2Format); ++ii)
+		{
+			if (KTX2_FORMAT_UNDEFINED != s_translateKtx2Format[ii].m_vkFormat
+			&&  vkFormat == s_translateKtx2Format[ii].m_vkFormat)
+			{
+				format = TextureFormat::Enum(ii);
+				break;
+			}
+
+			if (KTX2_FORMAT_UNDEFINED != s_translateKtx2Format[ii].m_vkFormatSrgb
+			&&  vkFormat == s_translateKtx2Format[ii].m_vkFormatSrgb)
+			{
+				format = TextureFormat::Enum(ii);
+				srgb = true;
+				break;
+			}
+		}
+
+		if (TextureFormat::Unknown == format)
+		{
+			for (uint32_t ii = 0; ii < BX_COUNTOF(s_translateKtx2Format2); ++ii)
+			{
+				if (vkFormat == s_translateKtx2Format2[ii].m_vkFormat)
+				{
+					format = s_translateKtx2Format2[ii].m_format;
+					srgb   = s_translateKtx2Format2[ii].m_srgb;
+					break;
+				}
+			}
+		}
+
+		if (TextureFormat::Unknown == format)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Unrecognized vkFormat.");
+			return false;
+		}
+
+		const uint32_t levelIndexSize = KTX2_LEVEL_INDEX_ENTRY_SIZE * numMips;
+
+		if (_size < KTX2_HEADER_SIZE + levelIndexSize)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Level index truncated.");
+			return false;
+		}
+
+		struct LevelIndex
+		{
+			uint64_t byteOffset;
+			uint64_t byteLength;
+			uint64_t uncompressedByteLength;
+		};
+
+		LevelIndex levels[16];
+
+		for (uint32_t ii = 0; ii < numMips; ++ii)
+		{
+			bx::read(&reader, levels[ii].byteOffset,             _err);
+			bx::read(&reader, levels[ii].byteLength,             _err);
+			bx::read(&reader, levels[ii].uncompressedByteLength, _err);
+		}
+
+		if (!_err->isOk() )
+		{
+			return false;
+		}
+
+		const ImageBlockInfo& blockInfo = s_imageBlockInfo[format];
+		const uint32_t blockWidth  = blockInfo.blockWidth;
+		const uint32_t blockHeight = blockInfo.blockHeight;
+		const uint32_t minBlockX   = blockInfo.minBlockX;
+		const uint32_t minBlockY   = blockInfo.minBlockY;
+		const uint32_t blockSize   = blockInfo.blockSize;
+		const uint32_t numSides    = numLayers * numFaces;
+		const uint32_t mipAlign    = ktx2MipAlignment(blockSize);
+
+		uint64_t expectedOffset = levels[numMips - 1].byteOffset;
+
+		for (int32_t lod = int32_t(numMips) - 1; lod >= 0; --lod)
+		{
+			uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( ( (width  >> lod) + blockWidth  - 1) / blockWidth  )*blockWidth);
+			uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( ( (height >> lod) + blockHeight - 1) / blockHeight )*blockHeight);
+			uint32_t mipDepth  = bx::max<uint32_t>(1, depth >> lod);
+			mipWidth  = bx::max<uint32_t>(1, mipWidth);
+			mipHeight = bx::max<uint32_t>(1, mipHeight);
+
+			const uint64_t perFaceSize = uint64_t(mipWidth/blockWidth) * (mipHeight/blockHeight) * mipDepth * blockSize;
+			const uint64_t expectedLevelSize = perFaceSize * numSides;
+
+			expectedOffset = ktx2AlignUp(expectedOffset, uint64_t(mipAlign) );
+
+			if (levels[lod].byteOffset != expectedOffset
+			||  levels[lod].byteLength < expectedLevelSize
+			||  levels[lod].byteOffset + levels[lod].byteLength > _size
+			||  levels[lod].byteOffset > UINT32_MAX)
+			{
+				BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Level data layout is unsupported.");
+				return false;
+			}
+
+			expectedOffset += levels[lod].byteLength;
+		}
+
+		_imageContainer.m_allocator   = NULL;
+		_imageContainer.m_data        = NULL;
+		_imageContainer.m_size        = 0;
+		_imageContainer.m_offset      = uint32_t(levels[numMips - 1].byteOffset);
+		_imageContainer.m_width       = width;
+		_imageContainer.m_height      = height;
+		_imageContainer.m_depth       = depth;
+		_imageContainer.m_format      = format;
+		_imageContainer.m_orientation = Orientation::R0;
+		_imageContainer.m_numLayers   = uint16_t(numLayers);
+		_imageContainer.m_numMips     = uint8_t(numMips);
+		_imageContainer.m_hasAlpha    = false;
+		_imageContainer.m_cubeMap     = cubeMap;
+		_imageContainer.m_ktx         = false;
+		_imageContainer.m_ktx2        = true;
+		_imageContainer.m_pvr3        = false;
+		_imageContainer.m_srgb        = srgb;
+		_imageContainer.m_parser      = ImageParser::Ktx2;
+
+		return true;
+	}
+
+	ImageContainer* imageParseKtx2(bx::AllocatorI* _allocator, const void* _src, uint32_t _size, bx::Error* _err)
+	{
+		BX_ERROR_SCOPE(_err);
+
+		ImageContainer imageContainer;
+		if (!imageParseKtx2(imageContainer, _src, _size, _err)
+		||  !_err->isOk() )
+		{
+			return NULL;
+		}
+
+		ImageContainer* output = imageAlloc(_allocator
+			, imageContainer.m_format
+			, imageContainer.m_width
+			, imageContainer.m_height
+			, imageContainer.m_depth
+			, imageContainer.m_numLayers
+			, imageContainer.m_cubeMap
+			, 1 < imageContainer.m_numMips
+			);
+
+		if (NULL == output)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Out of memory.");
+			return NULL;
+		}
+
+		output->m_srgb = imageContainer.m_srgb;
+		output->m_parser = imageContainer.m_parser;
+
+		const uint16_t numSides = imageContainer.m_numLayers * (imageContainer.m_cubeMap ? 6 : 1);
+
+		for (uint16_t side = 0; side < numSides; ++side)
+		{
+			for (uint8_t lod = 0, num = imageContainer.m_numMips; lod < num; ++lod)
+			{
+				ImageMip dstMip;
+				if (imageGetRawData(*output, side, lod, output->m_data, output->m_size, dstMip) )
+				{
+					ImageMip mip;
+					if (imageGetRawData(imageContainer, side, lod, _src, _size, mip) )
+					{
+						uint8_t* dstData = const_cast<uint8_t*>(dstMip.m_data);
+						bx::memCopy(dstData, mip.m_data, bx::min(mip.m_size, dstMip.m_size) );
+					}
+				}
+			}
+		}
+
+		return output;
+	}
+
+	struct Ktx2DfdDescriptor
+	{
+		uint32_t m_colorModel;
+		uint32_t m_numSamples;
+		struct Sample
+		{
+			uint16_t m_bitOffset;
+			uint8_t  m_bitLength;
+			uint8_t  m_channelType;
+			uint8_t  m_qualifiers;
+			uint32_t m_sampleLower;
+			uint32_t m_sampleUpper;
+		} m_samples[4];
+	};
+
+	static Ktx2DfdDescriptor ktx2DfdFromFormat(TextureFormat::Enum _format)
+	{
+		const ImageBlockInfo& blockInfo = s_imageBlockInfo[_format];
+		const uint32_t blockSize  = blockInfo.blockSize;
+		const bool isCompressed   = blockInfo.blockWidth > 1 || blockInfo.blockHeight > 1;
+
+		Ktx2DfdDescriptor dfd;
+		bx::memSet(&dfd, 0, sizeof(dfd) );
+
+		if (isCompressed)
+		{
+			switch (_format)
+			{
+			case TextureFormat::BC1:    dfd.m_colorModel = KTX2_DF_MODEL_BC1A;  break;
+			case TextureFormat::BC2:    dfd.m_colorModel = KTX2_DF_MODEL_BC2;   break;
+			case TextureFormat::BC3:    dfd.m_colorModel = KTX2_DF_MODEL_BC3;   break;
+			case TextureFormat::BC4:    dfd.m_colorModel = KTX2_DF_MODEL_BC4;   break;
+			case TextureFormat::BC5:    dfd.m_colorModel = KTX2_DF_MODEL_BC5;   break;
+			case TextureFormat::BC6H:   dfd.m_colorModel = KTX2_DF_MODEL_BC6H;  break;
+			case TextureFormat::BC7:    dfd.m_colorModel = KTX2_DF_MODEL_BC7;   break;
+			case TextureFormat::ETC1:   dfd.m_colorModel = KTX2_DF_MODEL_ETC1;  break;
+			case TextureFormat::ETC2:
+			case TextureFormat::ETC2A:
+			case TextureFormat::ETC2A1:
+			case TextureFormat::EACR11:
+			case TextureFormat::EACR11S:
+			case TextureFormat::EACRG11:
+			case TextureFormat::EACRG11S: dfd.m_colorModel = KTX2_DF_MODEL_ETC2;  break;
+			case TextureFormat::PTC12:
+			case TextureFormat::PTC14:
+			case TextureFormat::PTC12A:
+			case TextureFormat::PTC14A: dfd.m_colorModel = KTX2_DF_MODEL_PVRTC; break;
+			case TextureFormat::PTC22:
+			case TextureFormat::PTC24:  dfd.m_colorModel = KTX2_DF_MODEL_PVRTC2; break;
+			case TextureFormat::ASTC4x4:
+			case TextureFormat::ASTC5x4:
+			case TextureFormat::ASTC5x5:
+			case TextureFormat::ASTC6x5:
+			case TextureFormat::ASTC6x6:
+			case TextureFormat::ASTC8x5:
+			case TextureFormat::ASTC8x6:
+			case TextureFormat::ASTC8x8:
+			case TextureFormat::ASTC10x5:
+			case TextureFormat::ASTC10x6:
+			case TextureFormat::ASTC10x8:
+			case TextureFormat::ASTC10x10:
+			case TextureFormat::ASTC12x10:
+			case TextureFormat::ASTC12x12: dfd.m_colorModel = KTX2_DF_MODEL_ASTC;  break;
+			default:                       dfd.m_colorModel = KTX2_DF_MODEL_UNSPECIFIED; break;
+			}
+
+			dfd.m_numSamples = 1;
+			dfd.m_samples[0].m_bitOffset   = 0;
+			dfd.m_samples[0].m_bitLength   = uint8_t(blockSize * 8 - 1);
+			dfd.m_samples[0].m_channelType = 0;
+			dfd.m_samples[0].m_qualifiers  = 0;
+			dfd.m_samples[0].m_sampleLower = 0;
+			dfd.m_samples[0].m_sampleUpper = UINT32_MAX;
+		}
+		else
+		{
+			dfd.m_colorModel = KTX2_DF_MODEL_RGBSDA;
+
+			const uint8_t channelTypes[4] = {
+				KTX2_DF_CHANNEL_RGBSDA_R,
+				KTX2_DF_CHANNEL_RGBSDA_G,
+				KTX2_DF_CHANNEL_RGBSDA_B,
+				KTX2_DF_CHANNEL_RGBSDA_A,
+			};
+
+			uint8_t channelBits[4] = { 0, 0, 0, 0 };
+			uint32_t numChannels = 0;
+			const bx::EncodingType::Enum enc = bx::EncodingType::Enum(blockInfo.encoding);
+			const bool isFloat  = bx::EncodingType::Float == enc;
+			const bool isSigned = bx::EncodingType::Snorm == enc
+				|| bx::EncodingType::Int  == enc
+				|| bx::EncodingType::Float == enc;
+
+			channelBits[0] = blockInfo.rBits;
+			channelBits[1] = blockInfo.gBits;
+			channelBits[2] = blockInfo.bBits;
+			channelBits[3] = blockInfo.aBits;
+			for (uint32_t ii = 0; ii < 4; ++ii)
+			{
+				if (0 != channelBits[ii])
+				{
+					numChannels = ii + 1;
+				}
+			}
+
+			if (0 == numChannels)
+			{
+				dfd.m_numSamples = 1;
+				dfd.m_samples[0].m_bitOffset   = 0;
+				dfd.m_samples[0].m_bitLength   = uint8_t(blockSize * 8 - 1);
+				dfd.m_samples[0].m_channelType = 0;
+				dfd.m_samples[0].m_qualifiers  = 0;
+				dfd.m_samples[0].m_sampleLower = 0;
+				dfd.m_samples[0].m_sampleUpper = UINT32_MAX;
+			}
+			else
+			{
+				dfd.m_numSamples = numChannels;
+				uint32_t bitOffset = 0;
+				for (uint32_t ii = 0; ii < numChannels; ++ii)
+				{
+					const uint8_t bits = channelBits[ii];
+					dfd.m_samples[ii].m_bitOffset   = uint16_t(bitOffset);
+					dfd.m_samples[ii].m_bitLength   = uint8_t(bits - 1);
+					dfd.m_samples[ii].m_channelType = channelTypes[ii];
+
+					uint8_t qual = KTX2_DF_SAMPLE_QUALIFIER_LINEAR;
+					if (isFloat ) { qual |= KTX2_DF_SAMPLE_QUALIFIER_FLOAT;  }
+					if (isSigned) { qual |= KTX2_DF_SAMPLE_QUALIFIER_SIGNED; }
+					dfd.m_samples[ii].m_qualifiers  = qual;
+
+					if (isFloat)
+					{
+						dfd.m_samples[ii].m_sampleLower = 0xBF800000; // -1.0f
+						dfd.m_samples[ii].m_sampleUpper = 0x3F800000; //  1.0f
+					}
+					else
+					{
+						dfd.m_samples[ii].m_sampleLower = 0;
+						dfd.m_samples[ii].m_sampleUpper = (bits >= 32) ? UINT32_MAX : ( (1u << bits) - 1u);
+					}
+
+					bitOffset += bits;
+				}
+			}
+		}
+
+		return dfd;
+	}
+
+	static uint32_t ktx2DfdTotalSize(const Ktx2DfdDescriptor& _dfd)
+	{
+		// 4 (totalSize) + 24 (block header) + 16 * numSamples
+		return 4 + 24 + 16 * _dfd.m_numSamples;
+	}
+
+	static int32_t imageWriteKtx2Dfd(bx::WriterI* _writer, TextureFormat::Enum _format, bool _srgb, const Ktx2DfdDescriptor& _dfd, bx::Error* _err)
+	{
+		BX_ERROR_SCOPE(_err);
+
+		const ImageBlockInfo& blockInfo = s_imageBlockInfo[_format];
+		const uint8_t  blockWidth  = blockInfo.blockWidth;
+		const uint8_t  blockHeight = blockInfo.blockHeight;
+		const uint8_t  blockSize   = blockInfo.blockSize;
+		const uint16_t descriptorBlockSize = uint16_t(24 + 16 * _dfd.m_numSamples);
+		const uint32_t totalSize = 4 + descriptorBlockSize;
+
+		int32_t total = 0;
+		total += bx::write(_writer, totalSize, _err);
+
+		total += bx::write(_writer, uint16_t(0), _err); // vendorId | (descriptorType lower bits)
+		total += bx::write(_writer, uint16_t(0), _err); // descriptorType upper bits
+		total += bx::write(_writer, uint16_t(2), _err); // versionNumber = KTX 2.0
+		total += bx::write(_writer, descriptorBlockSize, _err);
+
+		total += bx::write(_writer, uint8_t(_dfd.m_colorModel), _err);
+		total += bx::write(_writer, uint8_t(KTX2_DF_PRIMARIES_BT709), _err);
+		total += bx::write(_writer, uint8_t(_srgb ? KTX2_DF_TRANSFER_SRGB : KTX2_DF_TRANSFER_LINEAR), _err);
+		total += bx::write(_writer, uint8_t(0), _err); // flags
+
+		total += bx::write(_writer, uint8_t(blockWidth  - 1), _err);
+		total += bx::write(_writer, uint8_t(blockHeight - 1), _err);
+		total += bx::write(_writer, uint8_t(0), _err); // texelBlockDimension2
+		total += bx::write(_writer, uint8_t(0), _err); // texelBlockDimension3
+
+		for (uint32_t ii = 0; ii < 8; ++ii)
+		{
+			uint8_t bp = (0 == ii) ? blockSize : uint8_t(0);
+			total += bx::write(_writer, bp, _err);
+		}
+
+		for (uint32_t ii = 0; ii < _dfd.m_numSamples; ++ii)
+		{
+			const Ktx2DfdDescriptor::Sample& s = _dfd.m_samples[ii];
+			total += bx::write(_writer, s.m_bitOffset, _err);
+			total += bx::write(_writer, s.m_bitLength, _err);
+			total += bx::write(_writer, uint8_t(s.m_channelType | (s.m_qualifiers & 0xF0) ), _err);
+			total += bx::write(_writer, uint8_t(0), _err); // samplePosition0
+			total += bx::write(_writer, uint8_t(0), _err); // samplePosition1
+			total += bx::write(_writer, uint8_t(0), _err); // samplePosition2
+			total += bx::write(_writer, uint8_t(0), _err); // samplePosition3
+			total += bx::write(_writer, s.m_sampleLower, _err);
+			total += bx::write(_writer, s.m_sampleUpper, _err);
+		}
+
+		return total;
+	}
+
+	int32_t imageWriteKtx2(bx::WriterI* _writer, TextureFormat::Enum _format, bool _cubeMap, uint32_t _width, uint32_t _height, uint32_t _depth, uint8_t _numMips, uint32_t _numLayers, bool _srgb, const void* _src, bx::Error* _err)
+	{
+		BX_ERROR_SCOPE(_err);
+
+		const Ktx2FormatInfo& tfi = s_translateKtx2Format[_format];
+		uint32_t vkFormat = tfi.m_vkFormat;
+		if (_srgb && KTX2_FORMAT_UNDEFINED != tfi.m_vkFormatSrgb)
+		{
+			vkFormat = tfi.m_vkFormatSrgb;
+		}
+
+		if (KTX2_FORMAT_UNDEFINED == vkFormat)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Format has no VkFormat mapping.");
+			return 0;
+		}
+
+		const ImageBlockInfo& blockInfo = s_imageBlockInfo[_format];
+		const uint32_t blockWidth   = blockInfo.blockWidth;
+		const uint32_t blockHeight  = blockInfo.blockHeight;
+		const uint32_t minBlockX    = blockInfo.minBlockX;
+		const uint32_t minBlockY    = blockInfo.minBlockY;
+		const uint32_t blockSize    = blockInfo.blockSize;
+		const bool     isCompressed = blockWidth > 1 || blockHeight > 1;
+
+		const uint32_t numMips   = bx::max<uint8_t>(_numMips, 1);
+		const uint32_t numLayers = bx::max<uint32_t>(_numLayers, 1);
+		const uint32_t numFaces  = _cubeMap ? 6 : 1;
+		const uint32_t numSides  = numLayers * numFaces;
+
+		const Ktx2DfdDescriptor dfd = ktx2DfdFromFormat(_format);
+		const uint32_t dfdTotalSize = ktx2DfdTotalSize(dfd);
+
+		uint32_t typeSize = 1;
+
+		if (!isCompressed)
+		{
+			const uint32_t numChannels = 0
+				+ (blockInfo.rBits > 0)
+				+ (blockInfo.gBits > 0)
+				+ (blockInfo.bBits > 0)
+				+ (blockInfo.aBits > 0)
+				;
+
+			if (numChannels > 0)
+			{
+				typeSize = bx::max<uint32_t>(1, blockSize / numChannels);
+			}
+		}
+
+		const uint32_t headerAndIndex = KTX2_HEADER_SIZE + KTX2_LEVEL_INDEX_ENTRY_SIZE * numMips;
+		const uint32_t dfdByteOffset = headerAndIndex;
+		const uint32_t dfdByteLength = dfdTotalSize;
+
+		const uint32_t mipAlign = ktx2MipAlignment(blockSize);
+
+		struct LevelInfo
+		{
+			uint64_t byteOffset;
+			uint64_t byteLength;
+			uint32_t mipWidth;
+			uint32_t mipHeight;
+			uint32_t mipDepth;
+			uint64_t perFaceSize;
+		};
+
+		LevelInfo levels[16];
+		bx::memSet(levels, 0, sizeof(levels) );
+
+		uint64_t curOffset = dfdByteOffset + dfdByteLength;
+
+		for (int32_t lod = int32_t(numMips) - 1; lod >= 0; --lod)
+		{
+			uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( ( (_width  >> lod) + blockWidth  - 1) / blockWidth  )*blockWidth);
+			uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( ( (_height >> lod) + blockHeight - 1) / blockHeight )*blockHeight);
+			uint32_t mipDepth  = bx::max<uint32_t>(1, _depth >> lod);
+			mipWidth  = bx::max<uint32_t>(1, mipWidth);
+			mipHeight = bx::max<uint32_t>(1, mipHeight);
+
+			const uint64_t perFaceSize = uint64_t(mipWidth/blockWidth) * (mipHeight/blockHeight) * mipDepth * blockSize;
+			const uint64_t levelSize   = perFaceSize * numSides;
+
+			curOffset = ktx2AlignUp(curOffset, uint64_t(mipAlign) );
+
+			levels[lod].byteOffset  = curOffset;
+			levels[lod].byteLength  = levelSize;
+			levels[lod].mipWidth    = mipWidth;
+			levels[lod].mipHeight   = mipHeight;
+			levels[lod].mipDepth    = mipDepth;
+			levels[lod].perFaceSize = perFaceSize;
+
+			curOffset += levelSize;
+		}
+
+		int32_t total = 0;
+
+		total += bx::write(_writer, s_ktx2Identifier, 12, _err);
+
+		total += bx::write(_writer, vkFormat, _err);
+		total += bx::write(_writer, typeSize, _err);
+		total += bx::write(_writer, _width, _err);
+		total += bx::write(_writer, _height, _err);
+		total += bx::write(_writer, _depth > 1 ? _depth : uint32_t(0), _err); // pixelDepth = 0 for 2D/cube
+		total += bx::write(_writer, _numLayers > 1 ? _numLayers : uint32_t(0), _err); // layerCount = 0 for non-array
+		total += bx::write(_writer, uint32_t(_cubeMap ? 6 : 1), _err); // faceCount
+		total += bx::write(_writer, numMips, _err); // levelCount
+		total += bx::write(_writer, uint32_t(0), _err); // supercompressionScheme = NONE
+
+		total += bx::write(_writer, dfdByteOffset, _err);
+		total += bx::write(_writer, dfdByteLength, _err);
+		total += bx::write(_writer, uint32_t(0), _err); // kvdByteOffset
+		total += bx::write(_writer, uint32_t(0), _err); // kvdByteLength
+		total += bx::write(_writer, uint64_t(0), _err); // sgdByteOffset
+		total += bx::write(_writer, uint64_t(0), _err); // sgdByteLength
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			total += bx::write(_writer, levels[lod].byteOffset, _err);
+			total += bx::write(_writer, levels[lod].byteLength, _err);
+			total += bx::write(_writer, levels[lod].byteLength, _err); // uncompressedByteLength == byteLength
+		}
+
+		total += imageWriteKtx2Dfd(_writer, _format, _srgb, dfd, _err);
+
+		const uint8_t* src = (const uint8_t*)_src;
+
+		uint64_t perSideTotal = 0;
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			perSideTotal += levels[lod].perFaceSize;
+		}
+
+		for (int32_t lod = int32_t(numMips) - 1; lod >= 0 && _err->isOk(); --lod)
+		{
+			while (uint64_t(total) < levels[lod].byteOffset && _err->isOk() )
+			{
+				uint8_t zero = 0;
+				total += bx::write(_writer, zero, _err);
+			}
+
+			uint64_t offsetInSide = 0;
+			for (int32_t ii = 0; ii < lod; ++ii)
+			{
+				offsetInSide += levels[ii].perFaceSize;
+			}
+
+			for (uint32_t layer = 0; layer < numLayers && _err->isOk(); ++layer)
+			{
+				for (uint32_t face = 0; face < numFaces && _err->isOk(); ++face)
+				{
+					const uint32_t side = layer * numFaces + face;
+					const uint64_t srcOffset = side * perSideTotal + offsetInSide;
+					total += bx::write(_writer, src + srcOffset, uint32_t(levels[lod].perFaceSize), _err);
+				}
+			}
+		}
+
+		return total;
+	}
+
+	int32_t imageWriteKtx2(bx::WriterI* _writer, ImageContainer& _imageContainer, const void* _data, uint32_t _size, bx::Error* _err)
+	{
+		BX_ERROR_SCOPE(_err);
+
+		const TextureFormat::Enum format = TextureFormat::Enum(_imageContainer.m_format);
+
+		const Ktx2FormatInfo& tfi = s_translateKtx2Format[format];
+		uint32_t vkFormat = tfi.m_vkFormat;
+		if (_imageContainer.m_srgb && KTX2_FORMAT_UNDEFINED != tfi.m_vkFormatSrgb)
+		{
+			vkFormat = tfi.m_vkFormatSrgb;
+		}
+
+		if (KTX2_FORMAT_UNDEFINED == vkFormat)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Format has no VkFormat mapping.");
+			return 0;
+		}
+
+		const ImageBlockInfo& blockInfo = s_imageBlockInfo[format];
+		const uint32_t blockWidth   = blockInfo.blockWidth;
+		const uint32_t blockHeight  = blockInfo.blockHeight;
+		const uint32_t blockSize    = blockInfo.blockSize;
+		const bool     isCompressed = blockWidth > 1 || blockHeight > 1;
+
+		const uint32_t numMips   = bx::max<uint8_t>(_imageContainer.m_numMips, 1);
+		const uint32_t numLayers = bx::max<uint32_t>(_imageContainer.m_numLayers, 1);
+		const uint32_t numFaces  = _imageContainer.m_cubeMap ? 6 : 1;
+		const uint32_t numSides  = numLayers * numFaces;
+
+		const Ktx2DfdDescriptor dfd = ktx2DfdFromFormat(format);
+		const uint32_t dfdTotalSize = ktx2DfdTotalSize(dfd);
+
+		uint32_t typeSize = 1;
+		if (!isCompressed)
+		{
+			const uint32_t numChannels = 0
+				+ (blockInfo.rBits > 0)
+				+ (blockInfo.gBits > 0)
+				+ (blockInfo.bBits > 0)
+				+ (blockInfo.aBits > 0)
+				;
+
+			if (numChannels > 0)
+			{
+				typeSize = bx::max<uint32_t>(1, blockSize / numChannels);
+			}
+		}
+
+		const uint32_t headerAndIndex = KTX2_HEADER_SIZE + KTX2_LEVEL_INDEX_ENTRY_SIZE * numMips;
+		const uint32_t dfdByteOffset = headerAndIndex;
+		const uint32_t dfdByteLength = dfdTotalSize;
+
+		const uint32_t mipAlign = ktx2MipAlignment(blockSize);
+
+		struct LevelInfo
+		{
+			uint64_t byteOffset;
+			uint64_t byteLength;
+			uint64_t perFaceSize;
+		};
+
+		LevelInfo levels[16];
+		bx::memSet(levels, 0, sizeof(levels) );
+
+		ImageMip mipInfo[16];
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			imageGetRawData(_imageContainer, 0, uint8_t(lod), _data, _size, mipInfo[lod]);
+			levels[lod].perFaceSize = mipInfo[lod].m_size;
+		}
+
+		uint64_t curOffset = dfdByteOffset + dfdByteLength;
+
+		for (int32_t lod = int32_t(numMips) - 1; lod >= 0; --lod)
+		{
+			curOffset = ktx2AlignUp(curOffset, uint64_t(mipAlign) );
+			levels[lod].byteOffset = curOffset;
+			levels[lod].byteLength = levels[lod].perFaceSize * numSides;
+			curOffset += levels[lod].byteLength;
+		}
+
+		int32_t total = 0;
+
+		total += bx::write(_writer, s_ktx2Identifier, 12, _err);
+
+		total += bx::write(_writer, vkFormat,                                          _err);
+		total += bx::write(_writer, typeSize,                                          _err);
+		total += bx::write(_writer, _imageContainer.m_width,                           _err);
+		total += bx::write(_writer, _imageContainer.m_height,                          _err);
+		total += bx::write(_writer, _imageContainer.m_depth > 1 ? _imageContainer.m_depth : uint32_t(0),         _err);
+		total += bx::write(_writer, _imageContainer.m_numLayers > 1 ? uint32_t(_imageContainer.m_numLayers) : uint32_t(0), _err);
+		total += bx::write(_writer, uint32_t(_imageContainer.m_cubeMap ? 6 : 1),       _err);
+		total += bx::write(_writer, numMips,                                           _err);
+		total += bx::write(_writer, uint32_t(0),                                       _err); // supercompressionScheme = NONE
+
+		total += bx::write(_writer, dfdByteOffset,    _err);
+		total += bx::write(_writer, dfdByteLength,    _err);
+		total += bx::write(_writer, uint32_t(0),      _err);
+		total += bx::write(_writer, uint32_t(0),      _err);
+		total += bx::write(_writer, uint64_t(0),      _err);
+		total += bx::write(_writer, uint64_t(0),      _err);
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			total += bx::write(_writer, levels[lod].byteOffset, _err);
+			total += bx::write(_writer, levels[lod].byteLength, _err);
+			total += bx::write(_writer, levels[lod].byteLength, _err);
+		}
+
+		total += imageWriteKtx2Dfd(_writer, format, _imageContainer.m_srgb, dfd, _err);
+
+		for (int32_t lod = int32_t(numMips) - 1; lod >= 0 && _err->isOk(); --lod)
+		{
+			while (uint64_t(total) < levels[lod].byteOffset && _err->isOk() )
+			{
+				uint8_t zero = 0;
+				total += bx::write(_writer, zero, _err);
+			}
+
+			for (uint32_t layer = 0; layer < numLayers && _err->isOk(); ++layer)
+			{
+				for (uint32_t face = 0; face < numFaces && _err->isOk(); ++face)
+				{
+					const uint16_t side = uint16_t(layer * numFaces + face);
+					ImageMip mip;
+					if (imageGetRawData(_imageContainer, side, uint8_t(lod), _data, _size, mip) )
+					{
+						total += bx::write(_writer, mip.m_data, mip.m_size, _err);
+					}
+				}
+			}
+		}
+
+		return total;
 	}
 
 // PVR3
@@ -4515,9 +5845,10 @@ namespace bimg
 		_imageContainer.m_hasAlpha    = hasAlpha;
 		_imageContainer.m_cubeMap     = numFaces > 1;
 		_imageContainer.m_ktx         = false;
-		_imageContainer.m_ktxLE       = false;
+		_imageContainer.m_ktx2        = false;
 		_imageContainer.m_pvr3        = true;
 		_imageContainer.m_srgb        = colorSpace > 0;
+		_imageContainer.m_parser      = ImageParser::Pvr3;
 
 		return TextureFormat::Unknown != format;
 	}
@@ -4546,10 +5877,6 @@ namespace bimg
 		{
 			return imageParsePvr3(_imageContainer, _reader, _err);
 		}
-		else if (BIMG_CHUNK_MAGIC_GNF == magic)
-		{
-			return imageParseGnf(_imageContainer, _reader, _err);
-		}
 		else if (BIMG_CHUNK_MAGIC_TEX == magic)
 		{
 			TextureCreate tc;
@@ -4577,9 +5904,10 @@ namespace bimg
 			_imageContainer.m_hasAlpha  = false;
 			_imageContainer.m_cubeMap   = tc.m_cubeMap;
 			_imageContainer.m_ktx       = false;
-			_imageContainer.m_ktxLE     = false;
+			_imageContainer.m_ktx2      = false;
 			_imageContainer.m_pvr3      = false;
 			_imageContainer.m_srgb      = false;
+			_imageContainer.m_parser    = ImageParser::Count;
 
 			return _err->isOk();
 		}
@@ -4610,7 +5938,7 @@ namespace bimg
 		{
 			if (isCompressed(_srcFormat))
 			{
-				uint32_t size = imageGetSize(NULL, uint16_t(_width), uint16_t(_height), 0, false, false, 1, TextureFormat::RGBA8);
+				uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, TextureFormat::RGBA8);
 				void* temp = bx::alloc(_allocator, size);
 				imageDecodeToRgba8(_allocator, temp, _src, _width, _height, _width*4, _srcFormat);
 				imageConvert(_allocator, dst, TextureFormat::R8, temp, TextureFormat::RGBA8, _width, _height, 1, _width*4, _dstPitch);
@@ -4784,16 +6112,19 @@ namespace bimg
 			{
 				ImageContainer* rgba32f = imageAlloc(_allocator
 					, TextureFormat::RGBA32F
-					, uint16_t(_width)
-					, uint16_t(_height)
-					, uint16_t(1)
+					, _width
+					, _height
+					, 1
 					, 1
 					, false
 					, false
 					);
-				imageDecodeToRgba32f(_allocator, rgba32f->m_data, _src, _width, _height, 1, _width*16, _srcFormat);
-				imageConvert(_allocator, _dst, TextureFormat::BGRA8, rgba32f->m_data, TextureFormat::RGBA32F, _width, _height, 1, _width*16, _dstPitch);
-				imageFree(rgba32f);
+				if (NULL != rgba32f)
+				{
+					imageDecodeToRgba32f(_allocator, rgba32f->m_data, _src, _width, _height, 1, _width*16, _srcFormat);
+					imageConvert(_allocator, _dst, TextureFormat::BGRA8, rgba32f->m_data, TextureFormat::RGBA32F, _width, _height, 1, _width*16, _dstPitch);
+					imageFree(rgba32f);
+				}
 			}
 			else
 			{
@@ -4881,16 +6212,118 @@ namespace bimg
 			break;
 
 		case TextureFormat::ETC2A1:
-			BX_WARN(false, "ETC2A1 decoder is not implemented.");
-			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffff0000) );
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_ETC2) )
+			{
+				for (uint32_t yy = 0; yy < height; ++yy)
+				{
+					for (uint32_t xx = 0; xx < width; ++xx)
+					{
+						decodeBlockEtc2Rgb8A1(temp, src);
+						src += 8;
+
+						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
+						bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
+						bx::memCopy(&block[1*_dstPitch], &temp[16], 16);
+						bx::memCopy(&block[2*_dstPitch], &temp[32], 16);
+						bx::memCopy(&block[3*_dstPitch], &temp[48], 16);
+					}
+				}
+			}
+			else
+			{
+				BX_WARN(false, "ETC2A1 decoder is disabled (BIMG_CONFIG_DECODE_ETC2).");
+				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffff0000) );
+			}
 			break;
 
 		case TextureFormat::EACR11:
 		case TextureFormat::EACR11S:
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_ETC2) )
+			{
+				const bool sign = TextureFormat::EACR11S == _srcFormat;
+
+				for (uint32_t yy = 0; yy < height; ++yy)
+				{
+					for (uint32_t xx = 0; xx < width; ++xx)
+					{
+						for (uint32_t ii = 0; ii < 16; ++ii)
+						{
+							temp[ii*4+0] = 0;
+							temp[ii*4+1] = 0;
+							temp[ii*4+2] = 0;
+							temp[ii*4+3] = 255;
+						}
+
+						if (sign)
+						{
+							decodeBlockEac<true >(temp, src, 2);
+						}
+						else
+						{
+							decodeBlockEac<false>(temp, src, 2);
+						}
+
+						src += 8;
+
+						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
+						bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
+						bx::memCopy(&block[1*_dstPitch], &temp[16], 16);
+						bx::memCopy(&block[2*_dstPitch], &temp[32], 16);
+						bx::memCopy(&block[3*_dstPitch], &temp[48], 16);
+					}
+				}
+			}
+			else
+			{
+				BX_WARN(false, "EAC decoder is disabled (BIMG_CONFIG_DECODE_ETC2).");
+				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ffff) );
+			}
+			break;
+
 		case TextureFormat::EACRG11:
 		case TextureFormat::EACRG11S:
-			BX_WARN(false, "EAC decoder is not implemented.");
-			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ffff) );
+			if (BX_ENABLED(BIMG_CONFIG_DECODE_ETC2) )
+			{
+				const bool sign = TextureFormat::EACRG11S == _srcFormat;
+
+				for (uint32_t yy = 0; yy < height; ++yy)
+				{
+					for (uint32_t xx = 0; xx < width; ++xx)
+					{
+						for (uint32_t ii = 0; ii < 16; ++ii)
+						{
+							temp[ii*4+0] = 0;
+							temp[ii*4+1] = 0;
+							temp[ii*4+2] = 0;
+							temp[ii*4+3] = 255;
+						}
+
+						if (sign)
+						{
+							decodeBlockEac<true >(temp, src,     2);
+							decodeBlockEac<true >(temp, src + 8, 1);
+						}
+						else
+						{
+							decodeBlockEac<false>(temp, src,     2);
+							decodeBlockEac<false>(temp, src + 8, 1);
+						}
+
+						src += 16;
+
+						uint8_t* block = &dst[yy*_dstPitch*4 + xx*16];
+						bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
+						bx::memCopy(&block[1*_dstPitch], &temp[16], 16);
+						bx::memCopy(&block[2*_dstPitch], &temp[32], 16);
+						bx::memCopy(&block[3*_dstPitch], &temp[48], 16);
+					}
+				}
+			}
+			else
+			{
+				BX_WARN(false, "EAC decoder is disabled (BIMG_CONFIG_DECODE_ETC2).");
+				imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xff00ffff) );
+			}
 			break;
 
 		case TextureFormat::PTC12:
@@ -5124,7 +6557,7 @@ namespace bimg
 					image.data_type = ASTCENC_TYPE_U8;
 					image.data      = &_dst;
 
-					const uint32_t size = imageGetSize(NULL, uint16_t(_width), uint16_t(_height), 0, false, false, 1, _srcFormat);
+					const uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, _srcFormat);
 
 					static const astcenc_swizzle swizzle
 					{   //0123/rgba swizzle corresponds to ASTC_RGBA
@@ -5315,7 +6748,7 @@ namespace bimg
 			default:
 				if (isCompressed(_srcFormat) )
 				{
-					uint32_t size = imageGetSize(NULL, uint16_t(_width), uint16_t(_height), 0, false, false, 1, TextureFormat::RGBA8);
+					uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, TextureFormat::RGBA8);
 					void* temp = bx::alloc(_allocator, size);
 					imageDecodeToRgba8(_allocator, temp, src, _width, _height, _width*4, _srcFormat);
 					imageRgba8ToRgba32f(dst, _width, _height, _width*4, temp);
@@ -5332,7 +6765,7 @@ namespace bimg
 
 	bool imageGetRawData(const ImageContainer& _imageContainer, uint16_t _side, uint8_t _lod, const void* _data, uint32_t _size, ImageMip& _mip)
 	{
-		uint32_t offset = _imageContainer.m_offset;
+		uint64_t offset = _imageContainer.m_offset;
 		TextureFormat::Enum format = TextureFormat::Enum(_imageContainer.m_format);
 		bool hasAlpha = _imageContainer.m_hasAlpha;
 
@@ -5375,8 +6808,13 @@ namespace bimg
 
 				if (_imageContainer.m_ktx)
 				{
+					if (offset + sizeof(uint32_t) > uint64_t(_size) )
+					{
+						return false;
+					}
+
 					const uint32_t size = _imageContainer.m_numLayers == 1 && _imageContainer.m_cubeMap ? mipSize : mipSize * numSides;
-					uint32_t imageSize  = bx::toHostEndian(*(const uint32_t*)&data[offset], _imageContainer.m_ktxLE);
+					uint32_t imageSize  = *(const uint32_t*)&data[offset];
 					BX_ASSERT(size == imageSize, "KTX: Image size mismatch %d (expected %d).", size, imageSize);
 					BX_UNUSED(size, imageSize);
 
@@ -5385,11 +6823,16 @@ namespace bimg
 
 				for (uint16_t side = 0; side < numSides; ++side)
 				{
-					BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %d, size %d)", offset, _size);
+					BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %lld, size %d)", offset, _size);
 
 					if (side == _side
 					&&  lod  == _lod)
 					{
+						if (offset + mipSize > uint64_t(_size) )
+						{
+							return false;
+						}
+
 						_mip.m_width     = mipWidth;
 						_mip.m_height    = mipHeight;
 						_mip.m_depth     = depth;
@@ -5412,6 +6855,60 @@ namespace bimg
 				depth  >>= 1;
 			}
 		}
+		else if (_imageContainer.m_ktx2)
+		{
+			const uint32_t mipAlign = ktx2MipAlignment(blockSize);
+			const uint8_t  numMips  = _imageContainer.m_numMips;
+
+			uint32_t mipSizes  [16];
+			uint32_t mipWidths [16];
+			uint32_t mipHeights[16];
+			uint32_t mipDepths [16];
+
+			for (uint8_t lod = 0; lod < numMips; ++lod)
+			{
+				uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( ( (_imageContainer.m_width  >> lod) + blockWidth  - 1) / blockWidth  )*blockWidth);
+				uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( ( (_imageContainer.m_height >> lod) + blockHeight - 1) / blockHeight )*blockHeight);
+				uint32_t mipDepth  = bx::max<uint32_t>(1, _imageContainer.m_depth >> lod);
+				mipWidth  = bx::max<uint32_t>(1, mipWidth);
+				mipHeight = bx::max<uint32_t>(1, mipHeight);
+
+				mipWidths [lod] = mipWidth;
+				mipHeights[lod] = mipHeight;
+				mipDepths [lod] = mipDepth;
+				mipSizes  [lod] = (mipWidth/blockWidth) * (mipHeight/blockHeight) * mipDepth * blockSize;
+			}
+
+			for (int32_t lod = int32_t(numMips) - 1; lod >= 0; --lod)
+			{
+				const uint32_t mipSize = mipSizes[lod];
+
+				BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %lld, size %d)", offset, _size);
+
+				if (uint8_t(lod) == _lod)
+				{
+					const uint64_t mipOffset = offset + uint64_t(_side) * mipSize;
+					if (mipOffset + mipSize > uint64_t(_size) )
+					{
+						return false;
+					}
+
+					_mip.m_width     = mipWidths [lod];
+					_mip.m_height    = mipHeights[lod];
+					_mip.m_depth     = mipDepths [lod];
+					_mip.m_blockSize = blockSize;
+					_mip.m_size      = mipSize;
+					_mip.m_data      = &data[mipOffset];
+					_mip.m_bpp       = bpp;
+					_mip.m_format    = format;
+					_mip.m_hasAlpha  = hasAlpha;
+					return true;
+				}
+
+				offset += uint64_t(mipSize) * numSides;
+				offset = ktx2AlignUp(offset, mipAlign);
+			}
+		}
 		else
 		{
 			for (uint16_t side = 0; side < numSides; ++side)
@@ -5422,7 +6919,7 @@ namespace bimg
 
 				for (uint8_t lod = 0, num = _imageContainer.m_numMips; lod < num; ++lod)
 				{
-					BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %d, size %d)", offset, _size);
+					BX_ASSERT(offset <= _size, "Reading past size of data buffer! (offset %lld, size %d)", offset, _size);
 
 					uint32_t mipWidth  = bx::max<uint32_t>(blockWidth  * minBlockX, ( (width  + blockWidth  - 1) / blockWidth )*blockWidth);
 					uint32_t mipHeight = bx::max<uint32_t>(blockHeight * minBlockY, ( (height + blockHeight - 1) / blockHeight)*blockHeight);
@@ -5433,6 +6930,11 @@ namespace bimg
 					if (side == _side
 					&&  lod  == _lod)
 					{
+						if (offset + mipSize > uint64_t(_size) )
+						{
+							return false;
+						}
+
 						_mip.m_width     = mipWidth;
 						_mip.m_height    = mipHeight;
 						_mip.m_depth     = depth;
