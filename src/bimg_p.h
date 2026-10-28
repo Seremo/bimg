@@ -72,7 +72,7 @@ namespace bimg
 		TextureFormat::Enum m_format;
 		uint16_t m_width;
 		uint16_t m_height;
-		uint16_t m_depth;
+		uint16_t m_depth;      //!< Zero if this is not a volume (3D) texture.
 		uint16_t m_numLayers;
 		uint8_t m_numMips;
 		bool m_cubeMap;
@@ -126,6 +126,25 @@ namespace bimg
 	///
 	ImageContainer* imageParseWic(
 		  bx::AllocatorI* _allocator
+		, const void* _data
+		, uint32_t _size
+		, bx::Error* _err
+		);
+
+	///
+	bool imageInfoFinalize(
+		  ImageContainer& _imageContainer
+		, ImageParser::Enum _parser
+		, TextureFormat::Enum _format
+		, uint32_t _width
+		, uint32_t _height
+		, bx::Error* _err
+		);
+
+	///
+	bool imageParseInfoWic(
+		  bx::AllocatorI* _allocator
+		, ImageContainer& _imageContainer
 		, const void* _data
 		, uint32_t _size
 		, bx::Error* _err

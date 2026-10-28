@@ -336,6 +336,7 @@ namespace bimg
 		"PNM",  // Pnm
 		"PSD",  // Psd
 		"PVR3", // Pvr3
+		"SVG",  // Svg
 		"TGA",  // Tga
 		"WebP", // Webp
 	};
@@ -442,7 +443,22 @@ namespace bimg
 		}
 	}
 
-	void imageRgba8Downsample2x2Ref(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src)
+	template<bool SrgbT>
+	BX_FORCE_INLINE float toLinearUnorm8(uint8_t _value)
+	{
+		const float value = _value * (1.0f/255.0f);
+		return SrgbT ? bx::toLinear(value) : value;
+	}
+
+	template<bool SrgbT>
+	BX_FORCE_INLINE uint8_t toGammaUnorm8(float _value)
+	{
+		const float encoded = SrgbT ? bx::toGamma(_value) : _value;
+		return uint8_t(bx::clamp(encoded*255.0f + 0.5f, 0.0f, 255.0f) );
+	}
+
+	template<bool SrgbT>
+	static void imageRgba8Downsample2x2RefT(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src)
 	{
 		const uint32_t dstWidth  = _width/2;
 		const uint32_t dstHeight = _height/2;
@@ -463,36 +479,46 @@ namespace bimg
 				const uint8_t* rgba = src;
 				for (uint32_t xx = 0; xx < dstWidth; ++xx, rgba += 8, dst += 4)
 				{
-					float rr = bx::toLinear(rgba[          0]);
-					float gg = bx::toLinear(rgba[          1]);
-					float bb = bx::toLinear(rgba[          2]);
-					float aa =              rgba[          3];
-					rr      += bx::toLinear(rgba[          4]);
-					gg      += bx::toLinear(rgba[          5]);
-					bb      += bx::toLinear(rgba[          6]);
-					aa      +=              rgba[          7];
-					rr      += bx::toLinear(rgba[_srcPitch+0]);
-					gg      += bx::toLinear(rgba[_srcPitch+1]);
-					bb      += bx::toLinear(rgba[_srcPitch+2]);
-					aa      +=              rgba[_srcPitch+3];
-					rr      += bx::toLinear(rgba[_srcPitch+4]);
-					gg      += bx::toLinear(rgba[_srcPitch+5]);
-					bb      += bx::toLinear(rgba[_srcPitch+6]);
-					aa      +=              rgba[_srcPitch+7];
+					float rr = toLinearUnorm8<SrgbT>(rgba[          0]);
+					float gg = toLinearUnorm8<SrgbT>(rgba[          1]);
+					float bb = toLinearUnorm8<SrgbT>(rgba[          2]);
+					float aa = toLinearUnorm8<false>(rgba[          3]);
+					rr      += toLinearUnorm8<SrgbT>(rgba[          4]);
+					gg      += toLinearUnorm8<SrgbT>(rgba[          5]);
+					bb      += toLinearUnorm8<SrgbT>(rgba[          6]);
+					aa      += toLinearUnorm8<false>(rgba[          7]);
+					rr      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+0]);
+					gg      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+1]);
+					bb      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+2]);
+					aa      += toLinearUnorm8<false>(rgba[_srcPitch+3]);
+					rr      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+4]);
+					gg      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+5]);
+					bb      += toLinearUnorm8<SrgbT>(rgba[_srcPitch+6]);
+					aa      += toLinearUnorm8<false>(rgba[_srcPitch+7]);
 
 					rr *= 0.25f;
 					gg *= 0.25f;
 					bb *= 0.25f;
 					aa *= 0.25f;
-					rr = bx::toGamma(rr);
-					gg = bx::toGamma(gg);
-					bb = bx::toGamma(bb);
-					dst[0] = (uint8_t)rr;
-					dst[1] = (uint8_t)gg;
-					dst[2] = (uint8_t)bb;
-					dst[3] = (uint8_t)aa;
+
+					dst[0] = toGammaUnorm8<SrgbT>(rr);
+					dst[1] = toGammaUnorm8<SrgbT>(gg);
+					dst[2] = toGammaUnorm8<SrgbT>(bb);
+					dst[3] = toGammaUnorm8<false>(aa);
 				}
 			}
+		}
+	}
+
+	void imageRgba8Downsample2x2Ref(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src, bool _srgb)
+	{
+		if (_srgb)
+		{
+			imageRgba8Downsample2x2RefT<true>(_dst, _width, _height, _depth, _srcPitch, _dstPitch, _src);
+		}
+		else
+		{
+			imageRgba8Downsample2x2RefT<false>(_dst, _width, _height, _depth, _srcPitch, _dstPitch, _src);
 		}
 	}
 
@@ -509,7 +535,7 @@ namespace bimg
 		const simd128_t tmp1     = simd_f32_div(tmp0, f1_055);
 		const simd128_t hi       = simd_f32_pow(tmp1, f2_4);
 		const simd128_t mask     = simd_f32_cmple(_a, f0_04045);
-		const simd128_t result   = simd_selb(mask, hi, lo);
+		const simd128_t result   = simd_selb(mask, lo, hi);
 
 		return result;
 	}
@@ -528,12 +554,13 @@ namespace bimg
 		const simd128_t tmp1       = simd_f32_mul(tmp0, f1_055);
 		const simd128_t hi         = simd_f32_sub(tmp1, f0_055);
 		const simd128_t mask       = simd_f32_cmple(_a, f0_0031308);
-		const simd128_t result     = simd_selb(mask, hi, lo);
+		const simd128_t result     = simd_selb(mask, lo, hi);
 
 		return result;
 	}
 
-	void imageRgba8Downsample2x2(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src)
+	template<bool SrgbT>
+	static void imageRgba8Downsample2x2T(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src)
 	{
 		const uint32_t dstWidth  = _width/2;
 		const uint32_t dstHeight = _height/2;
@@ -547,13 +574,15 @@ namespace bimg
 		const uint8_t* src = (const uint8_t*)_src;
 
 		using namespace bx;
-		const simd128_t unpack = simd128_ld(1.0f, 1.0f/256.0f, 1.0f/65536.0f, 1.0f/16777216.0f);
+		const simd128_t unpack = simd128_ld(1.0f/255.0f, 1.0f/(256.0f*255.0f), 1.0f/(65536.0f*255.0f), 1.0f/(16777216.0f*255.0f));
 		const simd128_t pack   = simd128_ld(1.0f, 256.0f*0.5f, 65536.0f, 16777216.0f*0.5f);
 		const simd128_t umask  = simd128_ld(0xffu, 0xff00u, 0xff0000u, 0xff000000u);
 		const simd128_t pmask  = simd128_ld(0xffu, 0x7f80u, 0xff0000u, 0x7f800000u);
 		const simd128_t wflip  = simd128_ld(0u, 0u, 0u, 0x80000000u);
 		const simd128_t wadd   = simd128_ld(0.0f, 0.0f, 0.0f, 32768.0f*65536.0f);
 		const simd128_t quater = simd128_splat(0.25f);
+		const simd128_t scale  = simd128_splat(255.0f);
+		const simd128_t half   = simd128_splat(0.5f);
 
 		for (uint32_t zz = 0; zz < _depth; ++zz)
 		{
@@ -589,18 +618,19 @@ namespace bimg
 					const simd128_t abgr2n = simd_f32_mul(abgr2c, unpack);
 					const simd128_t abgr3n = simd_f32_mul(abgr3c, unpack);
 
-					const simd128_t abgr0l = simd_to_linear(abgr0n);
-					const simd128_t abgr1l = simd_to_linear(abgr1n);
-					const simd128_t abgr2l = simd_to_linear(abgr2n);
-					const simd128_t abgr3l = simd_to_linear(abgr3n);
+					const simd128_t abgr0l = SrgbT ? simd_to_linear(abgr0n) : abgr0n;
+					const simd128_t abgr1l = SrgbT ? simd_to_linear(abgr1n) : abgr1n;
+					const simd128_t abgr2l = SrgbT ? simd_to_linear(abgr2n) : abgr2n;
+					const simd128_t abgr3l = SrgbT ? simd_to_linear(abgr3n) : abgr3n;
 
 					const simd128_t sum0   = simd_f32_add(abgr0l, abgr1l);
 					const simd128_t sum1   = simd_f32_add(abgr2l, abgr3l);
 					const simd128_t sum2   = simd_f32_add(sum0, sum1);
 					const simd128_t avg0   = simd_f32_mul(sum2, quater);
-					const simd128_t avg1   = simd_to_gamma(avg0);
+					const simd128_t avg1   = SrgbT ? simd_to_gamma(avg0) : avg0;
 
-					const simd128_t avg2   = simd_f32_mul(avg1, pack);
+					const simd128_t bytes  = simd_f32_min(scale, simd_f32_add(simd_f32_mul(avg1, scale), half) );
+					const simd128_t avg2   = simd_f32_mul(bytes, pack);
 					const simd128_t ftoi0  = simd_f32_ftoi_trunc(avg2);
 					const simd128_t ftoi1  = simd_and(ftoi0, pmask);
 					const simd128_t zwxy   = simd128_x32_swiz_zwxy(ftoi1);
@@ -612,6 +642,18 @@ namespace bimg
 					simd_x32_st1(dst, result);
 				}
 			}
+		}
+	}
+
+	void imageRgba8Downsample2x2(void* _dst, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch, const void* _src, bool _srgb)
+	{
+		if (_srgb)
+		{
+			imageRgba8Downsample2x2T<true>(_dst, _width, _height, _depth, _srcPitch, _dstPitch, _src);
+		}
+		else
+		{
+			imageRgba8Downsample2x2T<false>(_dst, _width, _height, _depth, _srcPitch, _dstPitch, _src);
 		}
 	}
 
@@ -651,10 +693,9 @@ namespace bimg
 			const uint32_t pitch = _imageContainer->m_width*16;
 			const uint32_t slice = _imageContainer->m_height*pitch;
 
-			for (uint32_t zz = 0, depth = _imageContainer->m_depth; zz < depth; ++zz)
+			for (uint32_t zz = 0, depth = mip.m_depth; zz < depth; ++zz)
 			{
-				const uint32_t srcDataStep = uint32_t(bx::floor(zz * _imageContainer->m_depth / float(depth) ) );
-				const uint8_t* srcData = &mip.m_data[srcDataStep*slice];
+				const uint8_t* srcData = &mip.m_data[zz*slice];
 
 				imageRgba32fToLinear(const_cast<uint8_t*>(srcData), mip.m_width, mip.m_height, 1, pitch, srcData);
 			}
@@ -697,10 +738,9 @@ namespace bimg
 			const uint32_t pitch = _imageContainer->m_width*16;
 			const uint32_t slice = _imageContainer->m_height*pitch;
 
-			for (uint32_t zz = 0, depth = _imageContainer->m_depth; zz < depth; ++zz)
+			for (uint32_t zz = 0, depth = mip.m_depth; zz < depth; ++zz)
 			{
-				const uint32_t srcDataStep = uint32_t(bx::floor(zz * _imageContainer->m_depth / float(depth) ) );
-				const uint8_t* srcData = &mip.m_data[srcDataStep*slice];
+				const uint8_t* srcData = &mip.m_data[zz*slice];
 
 				imageRgba32fToGamma(const_cast<uint8_t*>(srcData), mip.m_width, mip.m_height, 1, pitch, srcData);
 			}
@@ -1044,15 +1084,21 @@ namespace bimg
 	void imageSwizzleBgra8(void* _dst, uint32_t _dstPitch, uint32_t _width, uint32_t _height, const void* _src, uint32_t _srcPitch)
 	{
 		// Test can we do four 4-byte pixels at the time.
+		const bool pitchAligned = 1 >= _height
+			|| (0 == (_srcPitch & 0xf) && 0 == (_dstPitch & 0xf) )
+			;
+
 		if (0 != (_width&0x3)
 		||  _width < 4
 		||  !bx::isAligned(_src, 16)
-		||  !bx::isAligned(_dst, 16) )
+		||  !bx::isAligned(_dst, 16)
+		||  !pitchAligned)
 		{
 			BX_WARN(false, "Image swizzle is taking slow path.");
 			BX_WARN(bx::isAligned(_src, 16), "Source %p is not 16-byte aligned.", _src);
 			BX_WARN(bx::isAligned(_dst, 16), "Destination %p is not 16-byte aligned.", _dst);
 			BX_WARN(_width < 4, "Image width must be multiple of 4 (width %d).", _width);
+			BX_WARN(pitchAligned, "Image pitch must be multiple of 16 (src %d, dst %d).", _srcPitch, _dstPitch);
 			imageSwizzleBgra8Ref(_dst, _dstPitch, _width, _height, _src, _srcPitch);
 			return;
 		}
@@ -1274,6 +1320,20 @@ namespace bimg
 
 	bool imageConvert(bx::AllocatorI* _allocator, void* _dst, TextureFormat::Enum _dstFormat, const void* _src, TextureFormat::Enum _srcFormat, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _srcPitch, uint32_t _dstPitch)
 	{
+		if ( (TextureFormat::RGBA8 == _srcFormat && TextureFormat::BGRA8 == _dstFormat)
+		||   (TextureFormat::BGRA8 == _srcFormat && TextureFormat::RGBA8 == _dstFormat) )
+		{
+			const uint8_t* src = (const uint8_t*)_src;
+			uint8_t*       dst = (uint8_t*)_dst;
+
+			for (uint32_t zz = 0; zz < _depth; ++zz, src += size_t(_srcPitch)*_height, dst += size_t(_dstPitch)*_height)
+			{
+				imageSwizzleBgra8(dst, _dstPitch, _width, _height, src, _srcPitch);
+			}
+
+			return true;
+		}
+
 		UnpackFn unpack = s_packUnpack[_srcFormat].unpack;
 		PackFn   pack   = s_packUnpack[_dstFormat].pack;
 		if (NULL == pack
@@ -3372,22 +3432,26 @@ namespace bimg
 
 		{ 8, 0, 8, 0 },
 		{ 4, 4, 4, 4 },
-		{ 4, 4, 4, 4 },
+		{ 4, 4, 0, 0 },
 		{ 0, 8, 0, 8 },
 	};
 
-	uint32_t morton2d(uint32_t _x, uint32_t _y)
+	uint32_t morton2d(uint32_t _x, uint32_t _y, uint32_t _width, uint32_t _height)
 	{
 		using namespace bx;
 
-		const simd32_t xx     = simd32_splat(_x);
-		const simd32_t yy     = simd32_splat(_y);
+		const uint32_t minDim = bx::min(_width, _height);
+		const uint32_t mask   = minDim - 1;
+		const uint32_t shift  = bx::countTrailingZeros(minDim);
+
+		const simd32_t xx     = simd32_splat(_x & mask);
+		const simd32_t yy     = simd32_splat(_y & mask);
 		const simd32_t tmpx   = simd32_x32_part1by1(xx);
 		const simd32_t tmpy   = simd32_x32_part1by1(yy);
 		const simd32_t xbits  = simd32_x32_sll(tmpx, 1);
 		const simd32_t result = simd32_or(xbits, tmpy);
 
-		return result.u32;
+		return result.u32 | ( ( (_x | _y) & ~mask) << shift);
 	}
 
 	uint32_t getColor(const uint8_t _src[8])
@@ -3442,7 +3506,7 @@ namespace bimg
 		//                                 +-- B opaque    +-- A opaque   |
 		//                                           alpha punchthrough --+
 
-		const uint8_t* bc = &_src[morton2d(_x, _y) * 8];
+		const uint8_t* bc = &_src[morton2d(_x, _y, _width, _height) * 8];
 
 		uint32_t mod = 0
 			| bc[3]<<24
@@ -3451,7 +3515,7 @@ namespace bimg
 			| bc[0]
 			;
 
-		const bool punchthrough = !!(bc[7] & 1);
+		const bool punchthrough = !!(bc[4] & 1);
 		const uint8_t* weightTable = s_pvrtcWeights[4 * punchthrough];
 		const uint8_t* factorTable = s_pvrtcFactors[0];
 
@@ -3467,10 +3531,10 @@ namespace bimg
 				const uint32_t x0 = (_x + xOffset) % _width;
 				const uint32_t x1 = (x0 +       1) % _width;
 
-				const uint32_t bc0 = getColor(&_src[morton2d(x0, y0) * 8]);
-				const uint32_t bc1 = getColor(&_src[morton2d(x1, y0) * 8]);
-				const uint32_t bc2 = getColor(&_src[morton2d(x0, y1) * 8]);
-				const uint32_t bc3 = getColor(&_src[morton2d(x1, y1) * 8]);
+				const uint32_t bc0 = getColor(&_src[morton2d(x0, y0, _width, _height) * 8]);
+				const uint32_t bc1 = getColor(&_src[morton2d(x1, y0, _width, _height) * 8]);
+				const uint32_t bc2 = getColor(&_src[morton2d(x0, y1, _width, _height) * 8]);
+				const uint32_t bc3 = getColor(&_src[morton2d(x1, y1, _width, _height) * 8]);
 
 				const uint8_t f0 = factorTable[0];
 				const uint8_t f1 = factorTable[1];
@@ -3550,7 +3614,7 @@ namespace bimg
 		//                                 +-- B opaque    +-- A opaque   |
 		//                                           alpha punchthrough --+
 
-		const uint8_t* bc = &_src[morton2d(_x, _y) * 8];
+		const uint8_t* bc = &_src[morton2d(_x, _y, _width, _height) * 8];
 
 		uint32_t mod = 0
 			| bc[3]<<24
@@ -3559,7 +3623,7 @@ namespace bimg
 			| bc[0]
 			;
 
-		const bool punchthrough = !!(bc[7] & 1);
+		const bool punchthrough = !!(bc[4] & 1);
 		const uint8_t* weightTable = s_pvrtcWeights[4 * punchthrough];
 		const uint8_t* factorTable = s_pvrtcFactors[0];
 
@@ -3575,10 +3639,10 @@ namespace bimg
 				const uint32_t x0 = (_x + xOffset) % _width;
 				const uint32_t x1 = (x0 +       1) % _width;
 
-				const uint32_t bc0 = getColor(&_src[morton2d(x0, y0) * 8]);
-				const uint32_t bc1 = getColor(&_src[morton2d(x1, y0) * 8]);
-				const uint32_t bc2 = getColor(&_src[morton2d(x0, y1) * 8]);
-				const uint32_t bc3 = getColor(&_src[morton2d(x1, y1) * 8]);
+				const uint32_t bc0 = getColor(&_src[morton2d(x0, y0, _width, _height) * 8]);
+				const uint32_t bc1 = getColor(&_src[morton2d(x1, y0, _width, _height) * 8]);
+				const uint32_t bc2 = getColor(&_src[morton2d(x0, y1, _width, _height) * 8]);
+				const uint32_t bc3 = getColor(&_src[morton2d(x1, y1, _width, _height) * 8]);
 
 				const uint8_t f0 = factorTable[0];
 				const uint8_t f1 = factorTable[1];
@@ -3624,14 +3688,10 @@ namespace bimg
 
 		_width     = bx::max<uint32_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
 		_height    = bx::max<uint32_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
-		_depth     = bx::max<uint32_t>(1, _depth);
 		_numLayers = bx::max<uint32_t>(1, _numLayers);
 
-		// Reject dimensions that don't fit in 16 bits. No GPU supports textures
-		// larger than 65535 in any dimension, and the image format/size helpers
-		// (and ImageContainer::m_numLayers) are 16-bit; allowing larger values
-		// would truncate and under-allocate, leading to heap overflow writes when
-		// pixel data is copied in.
+		const uint32_t numSlices = bx::max<uint32_t>(1, _depth);
+
 		if (_width     > UINT16_MAX
 		||  _height    > UINT16_MAX
 		||  _depth     > UINT16_MAX
@@ -3640,17 +3700,15 @@ namespace bimg
 			return NULL;
 		}
 
-		const uint8_t numMips = _hasMips ? imageGetNumMips(_format, _width, _height, _depth) : 1;
-		uint64_t size = imageGetSize(NULL, _width, _height, _depth, _cubeMap, _hasMips, uint16_t(_numLayers), _format);
+		const uint8_t numMips = _hasMips ? imageGetNumMips(_format, _width, _height, numSlices) : 1;
+		uint64_t size = imageGetSize(NULL, _width, _height, numSlices, _cubeMap, _hasMips, uint16_t(_numLayers), _format);
 
-		// ImageContainer::m_size/m_offset are 32-bit, so reject anything that
-		// can't be addressed within that range to avoid truncated allocations.
 		if (size > UINT32_MAX)
 		{
 			return NULL;
 		}
 
-		ImageContainer* imageContainer = (ImageContainer*)bx::alignedAlloc(_allocator, size + bx::alignUp(sizeof(ImageContainer), 16), 16);
+		ImageContainer* imageContainer = (ImageContainer*)bx::alignedAlloc(_allocator, size_t(size) + bx::alignUp(sizeof(ImageContainer), 16), 16);
 
 		imageContainer->m_allocator   = _allocator;
 		imageContainer->m_data        = bx::alignPtr(imageContainer + 1, 0, 16);
@@ -4114,6 +4172,7 @@ namespace bimg
 
 		uint32_t dxgiFormat = 0;
 		uint32_t arraySize  = 1;
+		bool     volume     = 0 != (caps[1] & DDSCAPS2_VOLUME);
 		if (DDPF_FOURCC == (pixelFlags & DDPF_FOURCC)
 		&&  DDS_DX10    == fourcc)
 		{
@@ -4129,7 +4188,11 @@ namespace bimg
 
 			uint32_t miscFlags2;
 			total += bx::read(_reader, miscFlags2, _err);
+
+			volume = DDS_DX10_DIMENSION_TEXTURE3D == dims;
 		}
+
+		depth = volume ? bx::max<uint32_t>(1, depth) : 0;
 
 		BX_UNUSED(total);
 
@@ -4622,7 +4685,7 @@ namespace bimg
 		_imageContainer.m_offset      = (uint32_t)offset;
 		_imageContainer.m_width       = width;
 		_imageContainer.m_height      = height;
-		_imageContainer.m_depth       = bx::max<uint32_t>(depth, 1);
+		_imageContainer.m_depth       = 1 < depth ? depth : 0;
 		_imageContainer.m_format      = format;
 		_imageContainer.m_orientation = Orientation::R0;
 		_imageContainer.m_numLayers   = uint16_t(bx::max<uint32_t>(numberOfArrayElements, 1) );
@@ -5027,11 +5090,11 @@ namespace bimg
 		const uint32_t numFaces  = bx::max<uint32_t>(faceCount,  1);
 		const uint32_t width     = bx::max<uint32_t>(pixelWidth, 1);
 		const uint32_t height    = bx::max<uint32_t>(pixelHeight, 1);
-		const uint32_t depth     = bx::max<uint32_t>(pixelDepth, 1);
+		const uint32_t depth     = pixelDepth;
 		const bool     cubeMap   = (6 == faceCount);
 
 		if (16 < numMips
-		|| (cubeMap && 1 != depth) )
+		|| (cubeMap && 0 != depth) )
 		{
 			BX_ERROR_SET(_err, BIMG_ERROR, "KTX2: Invalid header values.");
 			return false;
@@ -5148,7 +5211,7 @@ namespace bimg
 		_imageContainer.m_offset      = uint32_t(levels[numMips - 1].byteOffset);
 		_imageContainer.m_width       = width;
 		_imageContainer.m_height      = height;
-		_imageContainer.m_depth       = depth;
+		_imageContainer.m_depth       = 1 < depth ? depth : 0;
 		_imageContainer.m_format      = format;
 		_imageContainer.m_orientation = Orientation::R0;
 		_imageContainer.m_numLayers   = uint16_t(numLayers);
@@ -5529,7 +5592,7 @@ namespace bimg
 		total += bx::write(_writer, typeSize, _err);
 		total += bx::write(_writer, _width, _err);
 		total += bx::write(_writer, _height, _err);
-		total += bx::write(_writer, _depth > 1 ? _depth : uint32_t(0), _err); // pixelDepth = 0 for 2D/cube
+		total += bx::write(_writer, _depth, _err); // pixelDepth = 0 for 2D/cube
 		total += bx::write(_writer, _numLayers > 1 ? _numLayers : uint32_t(0), _err); // layerCount = 0 for non-array
 		total += bx::write(_writer, uint32_t(_cubeMap ? 6 : 1), _err); // faceCount
 		total += bx::write(_writer, numMips, _err); // levelCount
@@ -5679,7 +5742,7 @@ namespace bimg
 		total += bx::write(_writer, typeSize,                                          _err);
 		total += bx::write(_writer, _imageContainer.m_width,                           _err);
 		total += bx::write(_writer, _imageContainer.m_height,                          _err);
-		total += bx::write(_writer, _imageContainer.m_depth > 1 ? _imageContainer.m_depth : uint32_t(0),         _err);
+		total += bx::write(_writer, _imageContainer.m_depth,                           _err);
 		total += bx::write(_writer, _imageContainer.m_numLayers > 1 ? uint32_t(_imageContainer.m_numLayers) : uint32_t(0), _err);
 		total += bx::write(_writer, uint32_t(_imageContainer.m_cubeMap ? 6 : 1),       _err);
 		total += bx::write(_writer, numMips,                                           _err);
@@ -5877,7 +5940,7 @@ namespace bimg
 		_imageContainer.m_offset      = (uint32_t)offset;
 		_imageContainer.m_width       = width;
 		_imageContainer.m_height      = height;
-		_imageContainer.m_depth       = depth;
+		_imageContainer.m_depth       = 1 < depth ? depth : 0;
 		_imageContainer.m_format      = format;
 		_imageContainer.m_orientation = Orientation::R0;
 		_imageContainer.m_numLayers   = 1;
@@ -5979,8 +6042,8 @@ namespace bimg
 			if (isCompressed(_srcFormat))
 			{
 				uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, TextureFormat::RGBA8);
-				void* temp = bx::alloc(_allocator, size);
-				imageDecodeToRgba8(_allocator, temp, _src, _width, _height, _width*4, _srcFormat);
+				void* temp = bx::alloc(_allocator, size_t(size) );
+				imageDecodeToRgba8(_allocator, temp, src, _width, _height, _width*4, _srcFormat);
 				imageConvert(_allocator, dst, TextureFormat::R8, temp, TextureFormat::RGBA8, _width, _height, 1, _width*4, _dstPitch);
 				bx::free(_allocator, temp);
 			}
@@ -6613,7 +6676,7 @@ namespace bimg
 					status = astcenc_decompress_image(
 						  context
 						, (const uint8_t*)_src
-						, size
+						, size_t(size)
 						, &image
 						, &swizzle
 						, 0
@@ -6794,7 +6857,7 @@ namespace bimg
 				if (isCompressed(_srcFormat) )
 				{
 					uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, TextureFormat::RGBA8);
-					void* temp = bx::alloc(_allocator, size);
+					void* temp = bx::alloc(_allocator, size_t(size) );
 					imageDecodeToRgba8(_allocator, temp, src, _width, _height, _width*4, _srcFormat);
 					imageRgba8ToRgba32f(dst, _width, _height, _width*4, temp);
 					bx::free(_allocator, temp);
@@ -7415,7 +7478,7 @@ namespace bimg
 			| DDSD_WIDTH
 			| DDSD_PIXELFORMAT
 			| DDSD_CAPS
-			| (1 < _depth            ? DDSD_DEPTH       : 0)
+			| (0 != _depth           ? DDSD_DEPTH       : 0)
 			| (1 < _numMips          ? DDSD_MIPMAPCOUNT : 0)
 			| (isCompressed(_format) ? DDSD_LINEARSIZE  : DDSD_PITCH)
 			)
@@ -7464,7 +7527,7 @@ namespace bimg
 		uint32_t caps[4] =
 		{
 			uint32_t(DDSCAPS_TEXTURE | (1 < _numMips ? DDSCAPS_COMPLEX|DDSCAPS_MIPMAP : 0) ),
-			uint32_t(_cubeMap ? DDSCAPS2_CUBEMAP|DSCAPS2_CUBEMAP_ALLSIDES : 0),
+			uint32_t(_cubeMap ? DDSCAPS2_CUBEMAP|DSCAPS2_CUBEMAP_ALLSIDES : (0 != _depth ? DDSCAPS2_VOLUME : 0) ),
 			0,
 			0,
 		};
@@ -7482,7 +7545,7 @@ namespace bimg
 		if (UINT32_MAX != dxgiFormat)
 		{
 			total += bx::write(_writer, dxgiFormat, _err);
-			total += bx::write(_writer, uint32_t(1 < _depth ? DDS_DX10_DIMENSION_TEXTURE3D : DDS_DX10_DIMENSION_TEXTURE2D), _err); // dims
+			total += bx::write(_writer, uint32_t(0 != _depth ? DDS_DX10_DIMENSION_TEXTURE3D : DDS_DX10_DIMENSION_TEXTURE2D), _err); // dims
 			total += bx::write(_writer, uint32_t(_cubeMap   ? DDS_DX10_MISC_TEXTURECUBE    : 0), _err); // miscFlags
 			total += bx::write(_writer, uint32_t(_numLayers), _err); // arraySize
 			total += bx::write(_writer, uint32_t(0), _err); // miscFlags2
@@ -7555,7 +7618,7 @@ namespace bimg
 		total += bx::write(_writer, tfi.m_fmt, _err); // glBaseInternalFormat
 		total += bx::write(_writer, _width, _err);
 		total += bx::write(_writer, _height, _err);
-		total += bx::write(_writer, _depth > 1 ? _depth : uint32_t(0), _err); //  For 2D and cube textures pixelDepth must be 0.
+		total += bx::write(_writer, _depth, _err); //  For 2D and cube textures pixelDepth must be 0.
 		total += bx::write(_writer, _numLayers > 1 ? _numLayers : uint32_t(0), _err); // numberOfArrayElements; If the texture is not an array texture, numberOfArrayElements must equal 0.
 		total += bx::write(_writer, _cubeMap ? uint32_t(6) : uint32_t(1), _err); // numberOfFaces; For cubemaps and cubemap arrays this should be 6. For non cubemaps this should be 1
 		total += bx::write(_writer, uint32_t(_numMips), _err);

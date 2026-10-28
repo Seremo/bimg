@@ -22,7 +22,10 @@ namespace bx
 
 namespace bimg
 {
+	///
 	typedef void (*PackFn)(void*, const float*);
+
+	///
 	typedef void (*UnpackFn)(float*, const void*);
 
 	/// Texture format enum.
@@ -201,6 +204,7 @@ namespace bimg
 			Pnm,   //!< Portable AnyMap (PBM/PGM/PPM).
 			Psd,   //!< Photoshop Document.
 			Pvr3,  //!< PVR (v3).
+			Svg,   //!< Scalable Vector Graphics.
 			Tga,   //!< Truevision TGA.
 			Webp,  //!< WebP.
 
@@ -225,6 +229,7 @@ namespace bimg
 		bool    cubeMap;            //!< Texture is cubemap.
 	};
 
+	/// 
 	struct ImageContainer
 	{
 		bx::AllocatorI* m_allocator;
@@ -249,6 +254,7 @@ namespace bimg
 		bool     m_srgb;
 	};
 
+	///
 	struct ImageMip
 	{
 		TextureFormat::Enum m_format;
@@ -262,6 +268,7 @@ namespace bimg
 		const uint8_t* m_data;
 	};
 
+	///
 	struct ImageBlockInfo
 	{
 		uint8_t bitsPerPixel;
@@ -309,6 +316,19 @@ namespace bimg
 	/// Converts image source format to string.
 	const char* getName(ImageParser::Enum _parser);
 
+	/// Returns true if image is a volume (3D) texture.
+	inline bool isVolume(const ImageContainer& _imageContainer)
+	{
+		return 0 != _imageContainer.m_depth;
+	}
+
+	/// Returns the number of depth slices; one for anything that is not a volume
+	/// (3D) texture.
+	inline uint32_t imageGetNumSlices(const ImageContainer& _imageContainer)
+	{
+		return 0 != _imageContainer.m_depth ? _imageContainer.m_depth : 1;
+	}
+
 	/// Returns number of mip-maps required for complete mip-map chain.
 	uint8_t imageGetNumMips(
 		  TextureFormat::Enum _format
@@ -348,6 +368,7 @@ namespace bimg
 		);
 
 	///
+	/// Set _srgb to false for linear data. Alpha is always averaged linearly.
 	void imageRgba8Downsample2x2(
 		  void* _dst
 		, uint32_t _width
@@ -356,6 +377,7 @@ namespace bimg
 		, uint32_t _srcPitch
 		, uint32_t _dstPitch
 		, const void* _src
+		, bool _srgb = true
 		);
 
 	///
